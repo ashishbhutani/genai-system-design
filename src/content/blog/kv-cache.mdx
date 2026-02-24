@@ -1,0 +1,100 @@
+---
+title: "Understanding the KV Cache: The Memory Wall of LLM Inference"
+description: "The KV Cache is the most critical memory component in modern LLM serving. Without it, text generation is impossibly slow. With it, you hit a severe memory bottleneck. Let's break down what it actually is and why it exists."
+pubDate: 2026-01-07
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview", "KV Cache"]
+
+---
+
+*This post assumes you know that LLMs process tokens sequentially during generation. If you don't know the difference between the prefill and decode phases, [start with my previous post on Prefill and Decode](/blog/prefill-decode).*
+
+> **The 30-Second Version**
+> Generating text token-by-token requires the model to look back at all previous tokens to understand context. Recalculating the math for all past tokens at every step is impossibly slow. The **KV Cache** solves this by storing intermediate mathematical representations (Keys and Values) of past tokens in GPU memory. It trades compute for memory, making generation fast but creating a massive VRAM bottleneck.
+
+## The practical scenarios you'll need to master
+
+When interviewing for a GenAI infrastructure role, expect the interviewer to test your understanding of memory bottlenecks. You will likely see scenarios exactly like these:
+
+* **Scenario A: The Long Context Crash** A user uploads a massive document and hits "summarize". The prefill finishes, but the server throws an Out Of Memory (OOM) error before generating a single word. You will need to explain how the prompt size directly bloated the KV Cache.
+* **Scenario B: The Batch Size Wall** Your system serves 10 users perfectly, but when you increase batch size to 50, the system crashes. You will need to explain why VRAM limits batch sizes and how the KV Cache is the primary culprit.
+* **Scenario C: The Multi-Turn Creep** A chat session starts fast, but after 20 messages, generation latency randomly spikes. You will be able to talk about how the KV Cache grows sequentially with every new word.
+
+Before we solve these, we need to understand what the model is doing under the hood.
+
+---
+
+## The Problem Statement: The cost of forgetting
+
+To understand the solution, we first look at the problem. Transformer models an attention mechanism. This mechanism allows the model to look at a sequence of words and figure out which words are most relevant to the current word.
+
+When an LLM generates the 100th token, the attention mechanism needs to compare that new token against the 99 tokens that came before it. To do this comparison, the model calculates three mathematical vectors for every token: Queries, Keys, and Values.
+
+Without caching, generating the 100th token requires the GPU to calculate the Keys and Values for all 99 previous tokens all over again. Then, for the 101st token, the GPU has to calculate the Keys and Values for all 100 previous tokens. The redundant math grows exponentially. The compute overhead becomes so massive that generating long responses in real-time is effectively impossible.
+
+So, how do we avoid doing the exact same math millions of times over? 
+
+---
+
+## The Concept Intuition: Remembering the past
+
+This is where the Key-Value Cache comes in. The intuition is incredibly simple: do not recalculate what you already know.
+
+Instead of recalculating the Key and Value vectors for historical tokens at every single step, we just calculate them once. When the model processes the first token, it saves its Key and Value vectors into a dedicated space in the GPU's memory. When it processes the second token, it saves those vectors. This storage space is the KV Cache.
+
+Now, when generating the 100th token, the model only computes the Query, Key, and Value for that one specific token. For the previous 99 tokens, it retrieves their pre-calculated Keys and Values directly from the cache.
+
+By doing this, we eliminate the redundant matrix multiplications. We fundamentally change the computational complexity of the attention mechanism. It is what makes real-time ChatGPT possible. 
+
+As detailed in a great deep dive by the [Databricks engineering team on LLM performance](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices), managing this cache is the central challenge of LLM serving.
+
+But this elegance comes with a steep physical cost.
+
+---
+
+## Hardware Bottlenecks: Trading compute for memory
+
+By storing these tensors, we make a massive trade-off. We are trading expensive compute cycles for precious GPU memory. 
+
+In the decode phase, the bottleneck shifts entirely. Generating a token requires the GPU to pull the entire model's weights into its compute cores. But now, it also has to pull the entire KV Cache for that specific request from VRAM into the compute cores.
+
+This means we are heavily restricted by memory bandwidth. The GPU cores are incredibly fast, but they can only generate the next token as quickly as the memory bus can feed them the cached data. If the KV Cache gets too large, reading it from memory takes longer, and the Time Per Output Token (TPOT) degrades.
+
+Compute is no longer the problem. Memory speed is the problem. Memory capacity is an even bigger problem.
+
+---
+
+## Real-world Trade-offs: The Memory Wall
+
+This trade-off introduces a massive new challenge. The KV Cache is not small. 
+
+Every single token adds a new Key and Value tensor to the cache. If you have a deep model with many layers, those tensors add up fast. For Llama 3 70B, a 128k context window can consume upwards of 40 gigabytes of VRAM just for the cache of a single user request. That is almost half an A100 GPU allocated to one user's conversation history.
+
+This is exactly why you cannot just bump your batch size infinitely. If you try to serve 50 users concurrently, you need 50 separate KV Caches sitting in VRAM. The model weights might only take up 140 gigabytes, but the combined KV Caches for 50 users will easily exceed physical memory limits.
+
+When you run out of VRAM, the system crashes with an OOM error. Serving engines have to cap batch size based on available memory, which limits total throughput.
+
+This leads us to the metrics you need to watch.
+
+---
+
+## Scaling Metrics: Watching the VRAM
+
+When you scale, compute utilization is a secondary concern. You need to watch your memory limits closely.
+
+The primary metric to monitor is **KV Cache Occupancy** or VRAM Utilization. If your KV Cache occupancy regularly hits 90 percent, a single user sending a unexpectedly long prompt will push you into an OOM crash.
+
+You also need to track **Batch Size vs TPOT**. As your batch size grows, verify that your generation latency remains acceptable. If the cache grows too large, the memory bandwidth bottleneck will cause token generation to slow down noticeably. 
+
+*(Note: We will talk about ways to optimize this VRAM usage later. Techniques like Grouped Query Attention inherently reduce cache size by sharing Keys and Values across attention heads).*
+
+For now, the critical takeaway is that managing VRAM is the hardest part of LLM infrastructure.
+
+---
+
+## Next Steps
+
+Now that we know the KV Cache is essentially an enormous block of memory, we run into the nightmare of memory fragmentation. In the next post, I will write about **PagedAttention** and how vLLM fixed this fragmentation problem. After that, we can dive into **Prefix Caching** to share parts of the KV Cache across different users.
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
