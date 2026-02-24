@@ -1,104 +1,117 @@
 ---
 title: "Prefill and Decode in LLM Inference"
-description: "Prefill and Decode are important stages in any LLM inference
-call. Knowing what happens in both stages helps in building a robust inference
-service, debug latencies, observe performance and be able to make tradeoffs in
-system designing"
+description: "Prefill and Decode are important stages in any LLM inference call. Knowing what happens in both stages helps in building a robust inference service, debug latencies, observe performance and be able to make tradeoffs in system designing."
 pubDate: 2026-01-05
 author: "Ashish Bhutani"
 tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview"]
 
 ---
 
+*This post assumes you have a high-level understanding of what an LLM is (prompts go in, tokens come out) but want to know what actually happens on the GPU during that process. If you're completely new to LLMs, I recommend checking out a basic primer first.*
+
+> **The 30-Second Version**
+> LLM inference isn't one continuous process. It's split into two phases: **Prefill** (reading the prompt) which is math-heavy and limited by GPU compute, and **Decode** (writing the response) which is memory-heavy and limited by how fast the GPU can move data. If you don't treat them differently in your system design, your application will be slow and crash under load.
+
 ## The practical scenarios you'll need to master
 
 If you're heading into a senior system design interview for a GenAI role, you aren’t just going to be asked "how does an LLM work." You're going to get hit with debugging scenarios that test whether you actually understand the hardware bottlenecks. 
 
-After reading this post, you'll be able to walk a recruiter through exactly why these common production failures happen and how to fix them:
+After reading this post, you'll be able to walk an interviewer through exactly why these common production failures happen and how to fix them:
 
-* **Scenario A: The "Sluggish Start"** — Users upload a 50-page PDF and wait 10 seconds for the first token to appear. You’ll know why this is a **Prefill** bottleneck and how to use **Tensor Parallelism** or **Prefix Caching** to kill that delay.
-* **Scenario B: The "Chatty" Bot Slowdown** — Your bot is snappy at first, but crawls as the conversation gets longer. You'll be able to explain the **KV Cache** bandwidth wall and why **MQA/GQA** or **Quantization** is the answer.
+* **Scenario A: The "Sluggish Start"** — Users upload a 50-page PDF and wait 10 seconds for the first token to appear. You’ll know why this is a **Prefill** bottleneck and how to use Tensor Parallelism or Prefix Caching to kill that delay.
+* **Scenario B: The "Chatty" Bot Slowdown** — Your bot is snappy at first, but crawls as the conversation gets longer. You'll be able to explain the **KV Cache** bandwidth wall and why MQA/GQA or Quantization is the answer.
 * **Scenario C: The "Stuttering" Stream** — A user is getting a response, but it randomly "hiccups" or pauses when someone else joins the chat. You’ll be able to talk about **Continuous Batching** and the "Noisy Neighbor" problem.
-* **Scenario D: The "OOM" Crash** — You have plenty of VRAM, but your system crashes after only two users. You'll know how to explain **Memory Fragmentation** and why **PagedAttention** is the standard fix.
+* **Scenario D: The "OOM" Crash** — You have plenty of VRAM, but your system crashes after only two users. You'll know how to explain **Memory Fragmentation** and why PagedAttention is the standard fix.
+
+So, why do all these completely different failures happen? It all comes back to a single misunderstanding about how models are served.
 
 ---
 
 ## Why LLM speed is actually two different things
 
-* I’ve been deep in the trenches of GenAI production for a while now. 
-* There’s one thing that keeps tripping up experienced backend engineers: LLM serving isn't just one workload. It’s two very different ones masquerading as a single API call.
-* When you hit a "generate" endpoint, you're triggering a two-act play. 
-* Act one is **Prefill** (reading the prompt). Act two is **Decode** (writing the response). 
-* If you treat them the same in your monitoring or load balancing, your system is going to feel like garbage for your users.
+I’ve been deep in the trenches of GenAI production for a while now. There’s one thing that keeps tripping up experienced backend engineers: LLM serving isn't just one workload. It’s two very different ones masquerading as a single API call.
 
+When you hit a "generate" endpoint, you're triggering a two-act play. Act one is **Prefill** (reading the prompt). Act two is **Decode** (writing the response). 
 
+If you treat them the same in your monitoring or load balancing, your system is going to feel like garbage for your users.
+
+Let's break down Act One first and see why big prompts cause so much trouble.
 
 ---
 
 ## Prefill: Handling the input
 
-* This is the model gulping down your entire prompt in one go. 
-* It does this in parallel. If you send a 2,000-word prompt, the GPU tries to crunch all those tokens at once. 
-* This phase is **Compute-Bound**. It’s raw, heavy math. 
-* The bottleneck is the GPU’s TFLOPS. 
-* If you’re seeing high "Time to First Token" (TTFT), your prompts are likely too big for your compute power. 
-* In practice, this is where RAG apps die. You stuff 20 documents into a prompt, and the user stares at a spinner for 5 seconds while the GPU sweats through the math.
+This is the model gulping down your entire prompt in one go. 
+
+It does this in parallel. If you send a 2,000-word prompt, the GPU tries to crunch all those tokens at once. This phase is **Compute-Bound**. It’s raw, heavy math. The bottleneck here is the GPU’s TFLOPS (how fast the cores can multiply numbers). 
+
+If you’re seeing high "Time to First Token" (TTFT), your prompts are likely too big for your compute power. In practice, this is where RAG apps die. You stuff 20 documents into a prompt, and the user stares at a spinner for 5 seconds while the GPU sweats through the math.
+
+Ok, so the model has digested the prompt. What happens when it starts talking back?
 
 ---
 
 ## Decode: Generating the output
 
-* Once the first word pops out, the model switches to Decode mode. 
-* It generates one token at a time, sequentially. 
-* Surprisingly, the bottleneck here isn't the math; it’s **Memory Bandwidth**. 
-* To produce a single token, the GPU has to pull every single model weight and the entire conversation history—stored in the **KV Cache**—from its VRAM. 
-* *(Note: I’ll be doing a deep-dive post on the KV Cache soon, but for now, just think of it as the model's short-term memory).*
-* This is why H100s are so expensive—it's the massive "pipes" (HBM3 memory) that move data fast enough so the cores aren't just sitting there waiting.
+Once the first word pops out, the model switches to Decode mode. 
 
+It generates one token at a time, sequentially. Surprisingly, the bottleneck here isn't the math; it’s **Memory Bandwidth**. 
 
+To produce a single token, the GPU has to pull every single model weight and the entire conversation history—stored in the **KV Cache**—from its VRAM. 
+
+*(Note: I’ll be doing a deep-dive post on the KV Cache soon, but for now, just think of it as the model's short-term memory).*
+
+This is why H100s are so expensive. It's the massive "pipes" (HBM3 memory) that move data fast enough so the cores aren't just sitting there waiting.
+
+Knowing this, the obvious solution seems to be packing more requests into a single GPU to increase throughput. But that introduces a whole new set of problems.
 
 ---
 
 ## The problem with batching
 
-* Batching is how we make these systems affordable. Running one request per GPU is a fast way to go broke. 
-* But here's the catch: the more requests you pack into a batch (to increase throughput), the more you're splitting that fixed memory bandwidth. 
-* Your "typing" speed (TPOT) will start to crawl. 
-* I've seen teams tune for "90% utilization" only to realize their chatbot was typing at 2 words per second. It feels broken to the user.
+Batching is how we make these systems affordable. Running one request per GPU is a fast way to go broke. 
+
+But here's the catch: the more requests you pack into a batch (to increase throughput), the more you're splitting that fixed memory bandwidth we just talked about in the Decode phase. 
+
+Your "typing" speed (TPOT - Time Per Output Token) will start to crawl. 
+
+I've seen teams tune for "90% utilization" only to realize their chatbot was typing at 2 words per second. It feels broken to the user.
+
+And it gets worse when you mix different types of requests together on the same server.
 
 ---
 
 ## Scheduling and "noisy neighbors"
 
-* Standard load balancers are pretty useless here. 
-* If User A sends a massive document for summary, that **Prefill** phase is going to hog the GPU’s compute for a solid second or two. 
-* During that time, User B—who is just waiting for their next token—will experience a stutter. The text just stops. 
-* To fix this, you need a scheduler that understands **Chunked Prefill** or **Prefix Caching**.
-* *(Note: We'll talk about the mechanics of Prefix Caching in a later post, but essentially it’s just recycling old 'memory' to save time).*
+Standard load balancers are pretty useless here. 
 
----
+If User A sends a massive document for summary, that **Prefill** phase is going to hog the GPU’s compute for a solid second or two. 
 
-## Common production mistakes
+During that time, User B—who is just waiting for their next token in the **Decode** phase—will experience a stutter. The text just stops. 
 
-* The biggest mistake? Benchmarking with 10-token prompts and thinking you're "scale-ready." 
-* It looks lightning fast in dev. 
-* Then you go to production, people start pasting in long emails or code snippets, and everything falls apart. 
-* Your TTFT spikes to 10 seconds because you didn't account for the prefill math on long contexts.
+To fix this, you need a scheduler that understands **Chunked Prefill** or **Prefix Caching**, breaking up the heavy prefill work so it doesn't block the light decode work.
+
+*(Note: We'll talk about the mechanics of Prefix Caching in a later post, but essentially it’s just recycling old 'memory' to save time).*
+
+So, how do we avoid falling into these traps when sizing our infrastructure?
 
 ---
 
 ## What to watch when scaling
 
-* Don't scale on CPU or some generic "GPU Load" percentage. 
-* Scale on **KV Cache Occupancy**. 
-* If your memory is full, it doesn't matter if your compute cores are idle—you can't fit another word in. 
-* You either have to wait for someone else to finish or start "swapping" data out, which absolutely nukes your performance.
+Don't scale on CPU or some generic "GPU Load" percentage. 
+
+Scale on **KV Cache Occupancy**. 
+
+If your memory is full, it doesn't matter if your compute cores are idle—you can't fit another word in. You either have to wait for someone else to finish or start "swapping" data out, which absolutely nukes your performance.
+
+The biggest mistake? Benchmarking with 10-token prompts and thinking you're "scale-ready." It looks lightning fast in dev. Then you go to production, people start pasting in long emails or code snippets, and everything falls apart because you didn't account for the prefill math on long contexts.
 
 ---
 
 ## Next Steps
 
-I am planning to write about **Speculative Decoding** next—it's basically the "cheat code" for making big models type faster. Or should we dive into **MQA/GQA** architectures first since we touched on them in the interview cases?
+I am planning to write about **Speculative Decoding** next—it's basically the "cheat code" for making big models type faster by tackling that memory bandwidth problem in the Decode phase. Or should we dive into **MQA/GQA** architectures first since we touched on them in the interview cases?
 
 ---
 *Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
