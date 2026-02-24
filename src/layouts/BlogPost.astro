@@ -142,5 +142,32 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 			</article>
 		</main>
 		<Footer />
+		<script type="module">
+			import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+			
+			// Initialize but do not auto-run yet
+			mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+			// Astro renders markdown code blocks as <pre class="astro-code" data-language="mermaid">
+			// We need to convert these into standard <div class="mermaid"> containers before running mermaid
+			document.querySelectorAll('pre').forEach(pre => {
+				const code = pre.querySelector('code');
+				const isMermaid = pre.dataset.language === 'mermaid' || 
+								  (code && code.className.includes('language-mermaid')) || 
+								  pre.className.includes('mermaid');
+				
+				if(isMermaid) {
+					const mermaidDiv = document.createElement('div');
+					mermaidDiv.className = 'mermaid';
+					// Extract raw text content, keeping newlines intact
+					mermaidDiv.textContent = code ? code.textContent : pre.textContent;
+					// Replace the code block entirely
+					pre.replaceWith(mermaidDiv);
+				}
+			});
+
+			// Now manually trigger the render
+			await mermaid.run();
+		</script>
 	</body>
 </html>
