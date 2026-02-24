@@ -1,0 +1,171 @@
+---
+title: "Speculative Decoding: The Cheat Code for Faster LLM Inference"
+description: "Speculative Decoding is a technique to speed up LLM text generation by using a small, fast 'draft' model to guess ahead, and then verifying those guesses in parallel with the big model. It directly attacks TPOT (Time Per Output Token), but comes with a real cost when the draft model guesses wrong."
+pubDate: 2026-01-06
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview", "Speculative Decoding"]
+
+---
+
+## The practical scenarios you'll need to master
+
+If you've been grinding through GenAI system design rounds, you'll eventually run into these:
+
+* **Scenario A: The "Slow Typer"** — Your 70B model streams responses at 8 tokens/second. Users complain it "feels slow" even though TTFT is fine. Your interviewer asks: "How do you make it type faster *without* switching to a smaller model?" You'll need to explain **Speculative Decoding** and why it's the go-to fix.
+* **Scenario B: The "Wasted GPU" Problem** — You deploy speculative decoding and your GPU utilization jumps from 30% to 85%, but your actual throughput barely moves. You'll need to explain the **acceptance rate** and why a bad draft model can burn compute for nothing.
+* **Scenario C: The "Which Draft Model?" Decision** — Your team is arguing between a 1B draft model (fast but inaccurate) and a 7B draft model (slower but better guesses). You'll be able to walk through the **speedup formula** and explain why this is a tunable trade-off, not a one-size-fits-all answer.
+* **Scenario D: The Batch Size Killer** — Speculative decoding works great for a single user, but your system serves 200 concurrent requests. You'll know why speculation **doesn't help much at high batch sizes** and when to turn it off.
+
+---
+
+## Why decode is slow (and why more compute doesn't fix it)
+
+In my [previous post on Prefill and Decode](/blog/prefill-decode), I talked about how the decode phase is **memory-bandwidth bound**, not compute-bound.
+
+Quick recap:
+* To generate one token, the GPU has to load the entire model's weights from VRAM. Billions of parameters, every single step.
+* The actual math (matrix multiplications) takes almost no time relative to the time spent *waiting for data to arrive from memory*.
+* This means your GPU cores are mostly idle during decode. They're sitting there, twiddling their thumbs, waiting for data.
+
+So here's the frustrating part: you have all this expensive compute sitting idle, and you can't use it to go faster because the bottleneck is the memory bus, not the ALUs.
+
+So naturally, you start wondering—can we put that idle compute to work somehow?
+
+---
+
+## The core idea: guess and verify
+
+Speculative decoding is beautifully simple in concept:
+
+1. **Get a small, fast "draft" model** (e.g., a 1B parameter model).
+2. **Let it guess the next K tokens** ahead of time. This is cheap because the draft model is tiny—it barely touches memory bandwidth.
+3. **Feed all K guessed tokens to the big model at once** for verification. The big model processes them in parallel, like a prefill pass—which is *compute-bound*, not memory-bound.
+4. **Accept the correct guesses, reject the first wrong one.** Say the draft model guessed 5 tokens and the first 4 were right—congrats, you just got 4 tokens in the time it normally takes to generate 1.
+
+The key insight: verification is basically free. The big model was going to load all its weights from memory anyway to produce one token. Since it has idle compute during that memory load, verifying 4-5 extra tokens in the same pass costs almost nothing extra.
+
+---
+
+## Ok but does this actually help?
+
+Easier to just look at the numbers.
+
+* Your big model takes 100ms per token (TPOT = 100ms).
+* Your draft model takes 5ms per token.
+* You speculate K=5 tokens ahead.
+
+**Without speculation:**
+* 5 tokens = 500ms.
+
+**With speculation:**
+* Draft generates 5 guesses: 5 × 5ms = 25ms.
+* Big model verifies all 5 in one pass: ~100ms (same as generating 1 token).
+* If all 5 are accepted: 5 tokens in 125ms instead of 500ms. That's a **4x speedup**.
+
+In practice, you won't get all 5 right every time. But even getting 3 out of 5 right means 3 tokens in ~115ms instead of 300ms. Still a massive win.
+
+---
+
+## The acceptance rate is everything
+
+This whole thing hinges on one number: the **acceptance rate** (α).
+
+* α = the fraction of draft tokens that the big model agrees with.
+* If α is high (say 0.8-0.9), speculative decoding is a huge win.
+* If α is low (say 0.3-0.4), you're burning GPU cycles on the draft model for almost no benefit. You guessed 5, accepted 1, and wasted the compute on the other 4.
+
+I didn't fully appreciate this until I saw it in production: acceptance rate is *wildly* task-dependent.
+
+* **Code completion?** High acceptance rate. Code is predictable—there are only so many ways to close a function.
+* **Creative writing?** Low acceptance rate. There are a hundred valid next words, and the small model picks different ones than the big model.
+* **Structured output (JSON, SQL)?** Very high acceptance rate. The syntax constrains the options.
+
+This is why you can't just "turn on" speculative decoding and call it a day. You need to monitor α in production and tune K accordingly.
+
+---
+
+## The wasted compute trade-off
+
+So what actually happens when the draft model gets it wrong?
+
+* The draft model generates K tokens. The big model verifies them.
+* Say the draft model gets tokens 1 and 2 right, but token 3 is wrong.
+* You accept tokens 1 and 2, throw away 3-5, and the big model produces the correct token 3.
+* Net result: You generated 3 tokens in one verification step. Not bad.
+
+Easy to miss in the excitement:
+* The **draft model's compute was wasted** for tokens 3, 4, and 5. That GPU time is just gone.
+* The **big model's verification of tokens 4 and 5** was also wasted. Yes, verification is "cheap" per token, but it's not zero—especially at high batch sizes where compute starts mattering again.
+
+And the worst case? If the draft model keeps whiffing on the *first* token (α is super low), you're actually **slower** than just doing vanilla decoding. You burned time on the draft model for nothing, and you still had to do the normal decode step anyway.
+
+A rough rule of thumb I've seen work:
+* If α < 0.5, turn off speculation. You're losing more than you're gaining.
+* If α > 0.7, you're in the sweet spot.
+* Between 0.5 and 0.7, it depends on the ratio of draft model speed to big model speed.
+
+---
+
+## This breaks down at high batch sizes
+
+This tripped me up when I first thought about it.
+
+Speculative decoding shines when the big model's GPU is **underutilized**—i.e., at low batch sizes where memory bandwidth is the bottleneck and compute is idle.
+
+But as you pack more requests into a batch:
+* The GPU's compute becomes the bottleneck, not memory bandwidth.
+* Verifying K extra tokens per request starts to actually cost real compute.
+* The "free verification" assumption breaks down.
+
+In practice, at batch sizes of 32+, the speedup from speculation drops significantly. At batch sizes of 128+, it can actually *hurt* throughput.
+
+This is why most production systems use speculative decoding selectively:
+* **Low-load / latency-sensitive paths:** Turn it on. Users get faster responses.
+* **High-load / throughput-sensitive paths:** Turn it off. You need every FLOP for actual work.
+
+*(Note: I'll be doing a deep-dive post on Continuous Batching and dynamic scheduling soon—it's tightly related to how you toggle speculation in a real serving stack).*
+
+---
+
+## So which draft model do you actually pick?
+
+This is where teams spend most of their time arguing, honestly. There's no single right answer.
+
+**Option 1: Same-family smaller model**
+* E.g., using Llama-3-1B as a draft for Llama-3-70B.
+* Pros: Similar vocabulary, similar "style" → higher acceptance rate.
+* Cons: Still a separate model to load and manage.
+
+**Option 2: Quantized version of the same model**
+* E.g., using a 4-bit quantized version of the big model as its own draft.
+* Pros: Very high acceptance rate since it's the same model, just approximated.
+* Cons: You now need VRAM for both the full model and the quantized draft.
+
+**Option 3: Model with shared layers (self-speculative)**
+* Some newer architectures let you skip layers in the big model itself to get a "draft" cheaply.
+* Pros: No extra model to deploy. No extra VRAM.
+* Cons: Still experimental. Acceptance rates vary.
+
+*(Note: I'll be doing a deep-dive post on Quantization techniques—INT8, INT4, GPTQ, AWQ—and when each makes sense for serving).*
+
+The VRAM budget is key. You're already tight on memory for the big model + KV cache. Adding a draft model means you need to be surgical about where that memory comes from.
+
+---
+
+## What to monitor in production
+
+If you deploy speculative decoding, here's what to watch:
+
+* **Acceptance rate (α):** The single most important metric. Track it per-request and per-task-type.
+* **Tokens generated per verification step:** This tells you your effective speedup. If it's close to 1, speculation isn't helping.
+* **Draft model latency:** If the draft model is too slow, it eats into your gains. The draft should be at least 10x faster than the big model per token.
+* **VRAM headroom:** The draft model competes with the KV cache for memory. If you're evicting cache entries to fit the draft model, you might be hurting overall throughput.
+
+---
+
+## Next Steps
+
+I'm planning to write about **KV Cache management and PagedAttention** next—how vLLM and similar systems handle memory fragmentation and why it's a game-changer for serving at scale. Or should we tackle **Quantization for Serving (INT8/INT4/AWQ/GPTQ)** first, since we just talked about using quantized models as draft models?
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
