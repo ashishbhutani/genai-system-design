@@ -13,6 +13,8 @@ const blog = defineCollection({
 			pubDate: z.coerce.date(),
 			updatedDate: z.coerce.date().optional(),
 			heroImage: image().optional(),
+			author: z.string().default('Ashish Bhutani'),
+			tags: z.array(z.string()).default([]),
 		}),
 });
 
