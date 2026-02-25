@@ -1,7 +1,7 @@
 // Place any global data in this file.
 // You can import this data from anywhere in your site by using the `import` keyword.
 
-export const SITE_TITLE = 'GenAI System Design — Ashish Bhutani';
+export const SITE_TITLE = 'GenAI System Design';
 export const SITE_DESCRIPTION =
     'Practical notes on building and scaling LLM systems in production.';
 export const SITE_AUTHOR = 'Ashish Bhutani';
