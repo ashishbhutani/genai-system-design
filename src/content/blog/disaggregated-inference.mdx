@@ -1,0 +1,101 @@
+---
+title: "Disaggregated Inference: Why Prefill and Decode Belong on Different Servers"
+description: "Prefill and decode have completely different hardware profiles. Running them on the same GPU pool wastes resources in both directions. Disaggregated inference separates them, but introduces a hard distributed systems problem: migrating the KV cache across the network."
+pubDate: 2026-01-11
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "concept", "Disaggregated Inference"]
+
+---
+
+*This post assumes you understand the prefill/decode split and the KV cache. If those are new, start with [Prefill and Decode](/blog/prefill-decode) and [KV Cache](/blog/kv-cache) first.*
+
+> **The 30-Second Version**
+> Prefill is compute-bound. Decode is memory-bandwidth-bound. Running both on the same GPU wastes whichever resource the current phase isn't using. Disaggregated inference separates them onto different server pools so each can be right-sized independently. The catch: the KV cache generated during prefill has to travel across the network to the decode node before token generation can begin. This KV cache migration is essentially the same distributed systems problem as live VM migration.
+
+## Why this matters in production
+
+If you have read the [prefill and decode post](/blog/prefill-decode), you know these two phases have opposite hardware profiles. Prefill hammers the GPU's compute cores (TFLOPS). Decode barely touches compute and instead saturates the memory bus (bandwidth).
+
+When both phases share the same GPU pool, you are stuck in an awkward compromise. During prefill bursts, your decode requests stutter because compute is hogged. During decode-heavy periods, your expensive GPU ALUs sit mostly idle.
+
+The [DistServe paper (OSDI 2024)](https://arxiv.org/abs/2401.09670) quantified this and showed that disaggregating the two phases onto separate GPU pools can serve up to 7.4x more requests while meeting the same latency targets.
+
+---
+
+## The architecture
+
+The idea is straightforward. You split your GPU fleet into two pools:
+
+- **Prefill pool**: Optimized for compute. These GPUs crunch through input prompts in parallel. You might use aggressive tensor parallelism here to minimize time-to-first-token.
+- **Decode pool**: Optimized for memory bandwidth. These GPUs generate tokens one at a time, pulling from the KV cache. You might pack more requests per GPU here since each individual decode step is light on compute.
+
+A scheduler sits in front and routes incoming requests to the prefill pool first. Once prefill completes, the request (along with its KV cache) moves to a decode node for token generation.
+
+```mermaid
+graph LR
+    classDef default fill:#1a1a1a,stroke:#333,stroke-width:1px,color:#fff;
+    classDef prefill fill:#0369a1,stroke:#0ea5e9,color:#fff;
+    classDef decode fill:#b45309,stroke:#f59e0b,color:#fff;
+    classDef router fill:#4d7c0f,stroke:#84cc16,color:#fff;
+    classDef user fill:#7c3aed,stroke:#a78bfa,color:#fff;
+
+    U[User Request]:::user
+    R[Router / Scheduler]:::router
+    P[Prefill Node\nCompute-optimized]:::prefill
+    KV((KV Cache\nTransfer)):::default
+    D[Decode Node\nBandwidth-optimized]:::decode
+    T[Streamed Tokens]:::user
+
+    U --> R
+    R --> P
+    P -- Network --> KV
+    KV -- Network --> D
+    D --> T
+```
+
+In production, this is exactly how [Meta, LinkedIn, Mistral, and HuggingFace run their LLM serving](https://blog.vllm.ai/2026/01/29/disaggregated-prefill-decode.html) via vLLM's disaggregated prefill feature. The [PyTorch blog on Meta's implementation](https://pytorch.org/blog/disaggregated-inference-at-scale/) confirmed that their disaggregated setup outperformed Meta's previous monolithic inference stack on both TTFT and per-token latency.
+
+---
+
+## The KV cache migration problem
+
+When prefill finishes, the GPU has computed Key and Value tensors for every layer of the model across every token in the input. For a 70B parameter model processing a 4,000-token prompt, this KV cache can easily be several gigabytes.
+
+That entire cache needs to cross the network and land on the decode node's GPU memory before a single output token can be generated. The transfer latency adds directly to time-to-first-token, which your users feel immediately.
+
+This is where it becomes a serious distributed systems problem. There are a few techniques that production systems use to manage it:
+
+**Pipelining the transfer.** You don't need to wait until all layers finish prefill before you start sending. The KV cache for layer 1 is ready long before layer 80 finishes computing. DistServe pipelines these transfers, sending early-layer caches to the decode node while later layers are still being computed on the prefill node. This overlaps compute and network I/O and cuts the effective transfer delay.
+
+**RDMA and high-speed interconnects.** At the bandwidth requirements we are talking about (multiple GB/s per request), regular TCP/IP networking is too slow. Production clusters use RDMA (Remote Direct Memory Access) or NVLink-based interconnects that let GPUs read from each other's memory directly, bypassing the CPU and OS network stack entirely.
+
+**KV cache compression.** Some systems quantize the KV cache before sending it (e.g., from FP16 to INT8), cutting the transfer size in half at the cost of a small accuracy trade-off.
+
+**Mooncake's distributed cache pool.** [Moonshot AI's Mooncake system](https://arxiv.org/abs/2407.00079) takes a different approach entirely. Instead of shipping the KV cache point-to-point from prefill to decode, they build a distributed KV cache pool using the otherwise idle CPU memory, DRAM, and SSDs across the cluster. The prefill node writes the cache into this shared pool, and the decode node reads from it. This avoids the bottleneck of a single network hop and lets them reuse cached prefixes across requests for free.
+
+---
+
+## A useful mental model: VM live migration
+
+If you have worked on infrastructure, the KV cache migration problem might remind you of live VM migration. Both involve moving a large in-memory state across a network so that a destination node can pick up where the source left off. Techniques like pre-copy pipelining, memory compression, and dedicated high-bandwidth networks show up in both contexts.
+
+The analogy is not perfect. VM migration involves iterative rounds of dirty page tracking since the VM keeps writing to memory during the transfer. KV cache is simpler in that sense since it's write-once during prefill and doesn't change after that.
+
+---
+
+## When disaggregation is overkill
+
+This architecture adds real operational complexity. You now have two separate GPU pools to manage, a scheduler that needs to be KV-cache-aware, and a high-speed network fabric that your deployment might not have.
+
+For a team running a single model serving a handful of concurrent users, the overhead is not worth it. The prefill/decode interference on a single GPU is barely noticeable at low traffic. You start feeling the pain at scale, when dozens or hundreds of concurrent requests are competing for GPU time and the interference between phases becomes the dominant source of latency variance.
+
+The decision also depends on your prompt-to-output ratio. If most requests have short prompts and long outputs, decode dominates and disaggregation helps a lot. If your workload is mostly long prompts with short outputs (like document summarization), the prefill pool does most of the work and the decode pool sits underutilized.
+
+---
+
+## Next Steps
+
+Now that we have separated prefill and decode onto different hardware, the next natural question is how the decode pool itself handles requests arriving and finishing at different times. That leads into **Continuous Batching**, which is how modern serving engines dynamically add and remove requests from the GPU's active batch without waiting for everyone to finish. Alternatively, we could go into **Prefix Caching**, which ties directly into Mooncake's approach of reusing KV cache across requests that share common prefixes.
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
