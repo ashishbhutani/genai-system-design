@@ -17,6 +17,12 @@ const recentPosts = posts.slice(0, 5);
 			<p class="subtitle">{SITE_DESCRIPTION}</p>
 		</section>
 
+		<section class="intro">
+			<p>
+				This blog covers the practical side of building and scaling GenAI systems in production. Topics include LLM inference optimization (prefill, decode, speculative decoding), memory management (KV cache, PagedAttention), vector search and RAG pipelines, embedding models, and the infrastructure decisions that come up when serving large language models at scale. Written from an engineering perspective — no hype, just how things actually work under the hood.
+			</p>
+		</section>
+
 		<section class="recent-posts">
 			<h2>Recent Posts</h2>
 			<ul>
@@ -75,6 +81,18 @@ const recentPosts = posts.slice(0, 5);
 		line-height: 1.6;
 		max-width: 600px;
 		margin: 0 auto;
+	}
+
+	.intro {
+		max-width: 720px;
+		margin: 0 auto;
+		padding: 0 1em 1.5em 1em;
+	}
+	.intro p {
+		color: rgb(var(--gray));
+		font-size: 0.95em;
+		line-height: 1.7;
+		text-align: center;
 	}
 
 	.recent-posts {
