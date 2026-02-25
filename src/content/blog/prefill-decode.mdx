@@ -3,7 +3,7 @@ title: "Prefill and Decode in LLM Inference"
 description: "Prefill and Decode are important stages in any LLM inference call. Knowing what happens in both stages helps in building a robust inference service, debug latencies, observe performance and be able to make tradeoffs in system designing."
 pubDate: 2026-01-05
 author: "Ashish Bhutani"
-tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview"]
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "concept"]
 
 ---
 
@@ -12,28 +12,26 @@ tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview"]
 > **The 30-Second Version**
 > LLM inference isn't one continuous process. It's split into two phases: **Prefill** (reading the prompt) which is math-heavy and limited by GPU compute, and **Decode** (writing the response) which is memory-heavy and limited by how fast the GPU can move data. If you don't treat them differently in your system design, your application will be slow and crash under load.
 
-## The practical scenarios you'll need to master
+## Why this matters in production
 
-If you're heading into a senior system design interview for a GenAI role, you aren’t just going to be asked "how does an LLM work." You're going to get hit with debugging scenarios that test whether you actually understand the hardware bottlenecks. 
+Most backend engineers treat LLM inference as a single black-box API call. That works until things start breaking in confusing ways. Here are common production failures that start making sense once you understand the Prefill/Decode split:
 
-After reading this post, you'll be able to walk an interviewer through exactly why these common production failures happen and how to fix them:
+* **The "Sluggish Start"** — Users upload a 50-page PDF and wait 10 seconds for the first token to appear. This is a **Prefill** bottleneck — the GPU is buried in math processing the input.
+* **The "Chatty" Bot Slowdown** — Your bot is snappy at first, but crawls as the conversation gets longer. This is a **KV Cache** bandwidth wall during the Decode phase.
+* **The "Stuttering" Stream** — A user is getting a response, but it randomly pauses when someone else joins the chat. This is a scheduling problem — **Continuous Batching** and the "Noisy Neighbor" effect.
+* **The "OOM" Crash** — You have plenty of VRAM, but your system crashes after only two users. This is **Memory Fragmentation** — and why PagedAttention exists.
 
-* **Scenario A: The "Sluggish Start"** — Users upload a 50-page PDF and wait 10 seconds for the first token to appear. You’ll know why this is a **Prefill** bottleneck and how to use Tensor Parallelism or Prefix Caching to kill that delay.
-* **Scenario B: The "Chatty" Bot Slowdown** — Your bot is snappy at first, but crawls as the conversation gets longer. You'll be able to explain the **KV Cache** bandwidth wall and why MQA/GQA or Quantization is the answer.
-* **Scenario C: The "Stuttering" Stream** — A user is getting a response, but it randomly "hiccups" or pauses when someone else joins the chat. You’ll be able to talk about **Continuous Batching** and the "Noisy Neighbor" problem.
-* **Scenario D: The "OOM" Crash** — You have plenty of VRAM, but your system crashes after only two users. You'll know how to explain **Memory Fragmentation** and why PagedAttention is the standard fix.
-
-So, why do all these completely different failures happen? It all comes back to a single misunderstanding about how models are served.
+All of these trace back to one core misunderstanding about how models are actually served.
 
 ---
 
 ## Why LLM speed is actually two different things
 
-I’ve been deep in the trenches of GenAI production for a while now. There’s one thing that keeps tripping up experienced backend engineers: LLM serving isn't just one workload. It’s two very different ones masquerading as a single API call.
+One thing that tends to trip up experienced backend engineers is that LLM serving isn't one workload. It's two very different ones hiding behind a single API call.
 
 When you hit a "generate" endpoint, you're triggering a two-act play. Act one is **Prefill** (reading the prompt). Act two is **Decode** (writing the response). 
 
-If you treat them the same in your monitoring or load balancing, your system is going to feel like garbage for your users.
+If you treat them the same in your monitoring or load balancing, the user experience degrades fast.
 
 Let's break down Act One first and see why big prompts cause so much trouble.
 
@@ -105,13 +103,13 @@ Scale on **KV Cache Occupancy**.
 
 If your memory is full, it doesn't matter if your compute cores are idle—you can't fit another word in. You either have to wait for someone else to finish or start "swapping" data out, which absolutely nukes your performance.
 
-The biggest mistake? Benchmarking with 10-token prompts and thinking you're "scale-ready." It looks lightning fast in dev. Then you go to production, people start pasting in long emails or code snippets, and everything falls apart because you didn't account for the prefill math on long contexts.
+A common mistake is benchmarking with 10-token prompts and thinking you're ready for production. It looks fast in dev. Then real users start pasting in long emails or code snippets, and everything falls apart because the prefill math on long contexts is a completely different load profile.
 
 ---
 
 ## Next Steps
 
-I am planning to write about **Speculative Decoding** next—it's basically the "cheat code" for making big models type faster by tackling that memory bandwidth problem in the Decode phase. Or should we dive into **MQA/GQA** architectures first since we touched on them in the interview cases?
+The next natural question from here is how to speed up the Decode phase itself. I'm planning to cover **Speculative Decoding** next — a technique that uses a smaller draft model to predict tokens ahead of the main model, attacking that memory bandwidth bottleneck we discussed. Or we could go into **MQA/GQA** architectures since we touched on the KV Cache problem above.
 
 ---
 *Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
