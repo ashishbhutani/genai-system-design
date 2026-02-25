@@ -1,0 +1,139 @@
+---
+title: "Logits, Sampling, and Token Selection in LLM Inference"
+description: "Before a token leaves the model, it passes through logit processing and sampling. This step is where temperature, top-k, top-p, and structured output constraints all live. Here's how it works and why it matters for serving."
+pubDate: 2026-01-14
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "concept", "Sampling"]
+
+---
+
+*This post assumes you know what an LLM forward pass looks like at a high level. If prefill and decode are unfamiliar, start with the [Prefill & Decode](/blog/prefill-decode) post.*
+
+> **The 30-Second Version**
+> At each decode step, the model produces a vector of raw scores (logits) — one per vocabulary token. These logits get transformed into probabilities and then sampled to pick the next token. Temperature, top-k, top-p, and repetition penalties all operate on this vector before sampling happens. This is also where structured output constraints (JSON mode, regex enforcement) are applied. It's a small step computationally, but it's where you control model behavior at serving time.
+
+## From forward pass to token
+
+Every decode step in an LLM ends the same way. The model's final layer outputs a vector of raw scores called **logits**. For a model with a vocabulary of 128,000 tokens, that's a 128,000-dimensional vector. Each entry represents how strongly the model "prefers" that token as the next output.
+
+These are not probabilities yet. They're unbounded real numbers — some positive, some negative, some large, some small. To turn them into a probability distribution, you apply **softmax**, which exponentiates each score and normalizes so they all sum to 1.
+
+For example, imagine the model just generated `"The cat sat on the"` and the top 5 logits for the next token look like this:
+
+| Token | Logit | After Softmax |
+|-------|-------|---------------|
+| `mat` | 5.2 | 0.58 |
+| `floor` | 3.8 | 0.14 |
+| `bed` | 3.5 | 0.10 |
+| `roof` | 3.1 | 0.07 |
+| `table` | 2.9 | 0.06 |
+| *(~128K others)* | *< 2.0* | *~0.05 total* |
+
+Softmax turns the raw scores into a distribution where `mat` gets 58% probability and the long tail of 128K tokens shares the remaining ~5%.
+
+Once you have probabilities, you sample from the distribution to pick the next token. The simplest version is **greedy decoding**: always pick the token with the highest probability. It's deterministic and fast, but it tends to produce repetitive, flat text.
+
+Most production systems use some form of stochastic sampling instead. That's where temperature, top-k, and top-p come in.
+
+---
+
+## Temperature
+
+Temperature is a scalar applied to the logits before softmax. You divide every logit by the temperature value T.
+
+- **T = 1.0**: No change. The distribution stays as the model learned it.
+- **T < 1.0**: The distribution gets sharper. High-probability tokens get even more likely, low-probability tokens get pushed down. At T → 0, this converges to greedy decoding.
+- **T > 1.0**: The distribution flattens out. Lower-probability tokens get more of a chance. The output becomes more random and "creative."
+
+Using the same logits from our example above:
+
+| Token | T=0.5 (sharp) | T=1.0 (default) | T=2.0 (flat) |
+|-------|---------------|------------------|--------------|
+| `mat` | 0.84 | 0.58 | 0.32 |
+| `floor` | 0.08 | 0.14 | 0.19 |
+| `bed` | 0.04 | 0.10 | 0.16 |
+| `roof` | 0.02 | 0.07 | 0.14 |
+| `table` | 0.01 | 0.06 | 0.12 |
+
+At T=0.5, `mat` dominates with 84% — nearly greedy. At T=2.0, the distribution is much flatter and any of the top tokens could be picked. Temperature does not add or remove any tokens from consideration. It just rescales how confident the model is in its top choices.
+
+---
+
+## Top-k sampling
+
+After applying temperature, you can further constrain the distribution by keeping only the **k highest-probability tokens** and zeroing out everything else. Then you renormalize and sample from the remaining k tokens.
+
+The problem with a fixed k is that it ignores the shape of the distribution. Consider two different situations using k=3:
+
+**Situation A** — Model is confident: `mat` has 84% after temperature. Top-3 keeps `mat`, `floor`, `bed`. The other two tokens barely matter and are just adding noise.
+
+**Situation B** — Model is uncertain: The top 10 tokens each have 7-12%. Top-3 throws away 7 tokens the model would have reasonably picked.
+
+In both cases k=3, but the result is very different. A fixed k doesn't adapt to the shape of the distribution.
+
+---
+
+## Top-p (nucleus) sampling
+
+Top-p sampling addresses the fixed-k problem. Instead of keeping a fixed number of tokens, you keep the **smallest set of tokens whose cumulative probability exceeds p**.
+
+Using our example with p=0.90 at default temperature:
+
+| Token | Probability | Cumulative | Kept? |
+|-------|-------------|------------|-------|
+| `mat` | 0.58 | 0.58 | ✓ |
+| `floor` | 0.14 | 0.72 | ✓ |
+| `bed` | 0.10 | 0.82 | ✓ |
+| `roof` | 0.07 | 0.89 | ✓ |
+| `table` | 0.06 | 0.95 | ✓ ← crosses 0.90 |
+| *everything else* | ... | ... | ✗ |
+
+Five tokens make the cut here. If the model were more confident and `mat` alone had 92% probability, only `mat` would pass — top-p naturally adapts to the distribution shape.
+
+This was introduced by [Holtzman et al. (2020)](https://arxiv.org/abs/1904.09751) in a paper that showed greedy and beam search lead to degenerate, repetitive text, while nucleus sampling produces more human-like output.
+
+In practice, most serving systems apply temperature first, then top-p (or top-k), then sample. The order matters: temperature changes the shape of the distribution before you truncate it.
+
+---
+
+## Repetition and frequency penalties
+
+Logit processing isn't just about controlling randomness. Repetition penalty modifies the logits of tokens that have already appeared in the output, reducing their scores to discourage the model from repeating itself.
+
+Frequency penalty works similarly but scales with how many times a token has appeared — the more repetitions, the stronger the penalty.
+
+These are applied directly to the logit vector before softmax and sampling, making them part of the same processing pipeline.
+
+---
+
+## Why this matters at the serving layer
+
+Logit processing is computationally cheap compared to the attention and feedforward computations in the model. A few vector operations on a 128K-dimensional array is negligible next to the matrix multiplications happening in the transformer layers.
+
+But it's architecturally significant because it's **the control surface for model behavior at serving time**:
+
+### Structured output enforcement
+
+When an API offers "JSON mode" or schema-constrained output, the enforcement happens at the logit level. Before sampling, a logit processor masks out tokens that would violate the grammar or schema. If the model has generated `{"name": "` and the schema says the name field is a string, only tokens that continue a valid string (letters, escape characters) get non-zero probabilities. Everything else gets masked to negative infinity.
+
+vLLM implements this through backends like [xgrammar and outlines](https://docs.vllm.ai/en/latest/features/structured_outputs.html), which track a grammar state machine and generate token masks at each step. This adds latency per token — not from the masking itself, but from computing which tokens are valid given the current grammar state.
+
+### Per-request configuration
+
+In a batched serving setup, different requests in the same batch can have different sampling parameters. One request might use temperature=0.7 with top-p=0.9. Another might use greedy decoding with a JSON schema constraint. The model's forward pass is the same for all of them (they share the same matrix multiplications), but the logit processing and sampling step is per-request.
+
+This means your serving engine's sampling layer needs to handle heterogeneous configurations within a single batch. It's not a hard engineering problem, but it's easy to overlook when thinking about batching as simply grouping requests together.
+
+### Token banning and safety
+
+Content filtering at the token level also happens here. If certain tokens or sequences are banned (slurs, PII patterns, specific code constructs), the logit processor can set their logits to negative infinity before sampling. This is a hard guarantee — the model literally cannot produce those tokens — unlike post-hoc filtering which catches outputs after they're generated.
+
+---
+
+## Next steps
+
+This post covers the last mile of a single decode step. A future post on **Continuous Batching** will look at how serving engines manage many requests running these decode steps at different rates, and how the scheduler decides when to run prefill vs. decode within the same GPU.
+
+---
+
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
