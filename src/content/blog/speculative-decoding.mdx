@@ -1,9 +1,9 @@
 ---
-title: "Speculative Decoding: The Cheat Code for Faster LLM Inference"
+title: "Speculative Decoding: Making Large Models Generate Faster"
 description: "Speculative Decoding speeds up LLM text generation using a small 'draft' model to guess ahead, verifying guesses in parallel with the big model. It attacks TPOT but carries a cost when guesses fail."
 pubDate: 2026-01-06
 author: "Ashish Bhutani"
-tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview", "Speculative Decoding"]
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "concept", "Speculative Decoding"]
 
 ---
 
@@ -12,14 +12,14 @@ tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "Interview", "
 > **The 30-Second Version**
 > Decode phase is memory-bound, leaving GPU compute idle. We use a tiny "draft" model to quickly guess the next few tokens. We feed those guesses to the big model, which uses its idle compute to verify them all at once. If accurate, you generate multiple tokens in the time normally taken for one.
 
-## The practical scenarios you'll need to master
+## Why this matters
 
-In a senior GenAI system design interview, expect these scenarios:
+If you're running a large model (say 70B parameters) and the generation speed feels sluggish, speculative decoding is one of the more interesting techniques to understand. Here are the kinds of problems it addresses:
 
-* **The "Slow Typer"**: Your 70B model streams at 8 tokens/s. How do you speed it up without a smaller model? (Answer: **Speculative Decoding**)
-* **The "Wasted GPU"**: You deploy speculation; GPU utilization spikes but throughput doesn't. Why? (Answer: **Low acceptance rate**)
-* **The "Which Draft?" Decision**: Should you use a 1B or 7B draft model? (Answer: **Draft speed vs. accuracy tradeoff**)
-* **The Batch Size Killer**: Why does speculation hurt performance at 200 concurrent requests? (Answer: **Compute bottleneck shifts**)
+* **The "Slow Typer"**: Your 70B model streams at 8 tokens/s. Users are complaining. Speculative decoding can help speed this up without swapping to a smaller model.
+* **The "Wasted GPU"**: You deploy speculation, GPU utilization spikes but throughput doesn't improve. This usually means a low acceptance rate from a poorly matched draft model.
+* **The "Which Draft?" Decision**: Should you use a 1B or 7B draft model? There's a real speed vs. accuracy trade-off here.
+* **The Batch Size Concern**: At high concurrency (200+ requests), speculation can actually hurt performance because the compute bottleneck shifts.
 
 ---
 
@@ -68,7 +68,7 @@ Acceptance rate is heavily task-dependent:
 * **Creative writing**: Low α (too many valid word choices).
 * **Structured JSON**: High α (constrained by schema).
 
-You can't just deploy this blindly. You must monitor α and tune *K* based on your workload.
+You can't just deploy this blindly. It's worth monitoring α and tuning *K* based on your workload.
 
 ---
 
