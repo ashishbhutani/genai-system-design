@@ -17,23 +17,10 @@
 		0 16px 32px rgba(var(--gray), 33%);
 }
 
-@font-face {
-	font-family: "Atkinson";
-	src: url("/fonts/atkinson-regular.woff") format("woff");
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-@font-face {
-	font-family: "Atkinson";
-	src: url("/fonts/atkinson-bold.woff") format("woff");
-	font-weight: 700;
-	font-style: normal;
-	font-display: swap;
-}
+/* Fonts loaded via Google Fonts in BaseHead.astro */
 
 body {
-	font-family: "Atkinson", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	margin: 0;
 	padding: 0;
 	text-align: left;
@@ -42,7 +29,7 @@ body {
 	word-wrap: break-word;
 	overflow-wrap: break-word;
 	color: rgb(var(--gray-dark));
-	font-size: 18px;
+	font-size: 17px;
 	line-height: 1.75;
 }
 
@@ -53,27 +40,37 @@ main {
 	padding: 2em 1em;
 }
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
 	margin: 0 0 0.5rem 0;
 	color: rgb(var(--black));
 	line-height: 1.3;
 	letter-spacing: -0.02em;
 }
+
 h1 {
 	font-size: 2.5em;
 }
+
 h2 {
 	font-size: 1.75em;
 	margin-top: 1.5em;
 }
+
 h3 {
 	font-size: 1.35em;
 }
+
 h4 {
 	font-size: 1.15em;
 }
 
-strong, b {
+strong,
+b {
 	font-weight: 700;
 }
 
@@ -81,6 +78,7 @@ a {
 	color: var(--accent);
 	transition: color 0.15s ease;
 }
+
 a:hover {
 	color: var(--accent-dark);
 }
@@ -88,6 +86,7 @@ a:hover {
 p {
 	margin-bottom: 1em;
 }
+
 .prose p {
 	margin-bottom: 1.5em;
 }
@@ -96,22 +95,28 @@ textarea {
 	width: 100%;
 	font-size: 16px;
 }
+
 input {
 	font-size: 16px;
 }
+
 table {
 	width: 100%;
 	border-collapse: collapse;
 }
-th, td {
+
+th,
+td {
 	padding: 0.5em 0.75em;
 	border-bottom: 1px solid rgb(var(--gray-light));
 	text-align: left;
 }
+
 th {
 	font-weight: 700;
 	color: rgb(var(--black));
 }
+
 img {
 	max-width: 100%;
 	height: auto;
@@ -124,7 +129,7 @@ code {
 	background-color: rgba(var(--gray-light), 0.7);
 	border-radius: 4px;
 	font-size: 0.88em;
-	font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+	font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, monospace;
 }
 
 /* Code blocks */
@@ -136,9 +141,10 @@ pre {
 	font-size: 0.9em;
 	line-height: 1.5;
 }
-pre > code {
+
+pre>code {
 	all: unset;
-	font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+	font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, monospace;
 }
 
 blockquote {
@@ -156,12 +162,15 @@ hr {
 }
 
 /* Bullet lists */
-ul, ol {
+ul,
+ol {
 	padding-left: 1.5em;
 }
+
 li {
 	margin-bottom: 0.4em;
 }
+
 li::marker {
 	color: var(--accent);
 }
@@ -170,12 +179,15 @@ li::marker {
 	body {
 		font-size: 16px;
 	}
+
 	main {
 		padding: 1em;
 	}
+
 	h1 {
 		font-size: 1.8em;
 	}
+
 	h2 {
 		font-size: 1.4em;
 	}
