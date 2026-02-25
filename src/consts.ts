@@ -3,7 +3,7 @@
 
 export const SITE_TITLE = 'GenAI System Design — Ashish Bhutani';
 export const SITE_DESCRIPTION =
-    'Practical notes on designing, deploying, and scaling large language model systems in production. Covering LLM serving, inference optimization, speculative decoding, KV cache, and ML infrastructure — built for backend engineers and system design interviews.';
+    'Practical notes on building and scaling LLM systems in production.';
 export const SITE_AUTHOR = 'Ashish Bhutani';
 export const SITE_KEYWORDS =
     'GenAI system design, LLM serving, ML infrastructure, speculative decoding, KV cache, inference optimization, system design interview, LLM inference, GPU serving, GenAI infrastructure';
