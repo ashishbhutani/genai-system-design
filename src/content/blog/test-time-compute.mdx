@@ -1,0 +1,106 @@
+---
+title: "Test-Time Compute and LLM Serving"
+description: "Models that 'think longer' break the assumptions your serving stack was built on. Latency becomes unpredictable, KV caches explode, batching gets harder, and speculative decoding loses its edge. Here's what changes."
+pubDate: 2026-01-12
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "concept", "Test-Time Compute"]
+
+---
+
+*This post assumes familiarity with LLM inference basics. If prefill/decode, KV cache, or speculative decoding are new to you, start with the earlier posts in this series.*
+
+> **The 30-Second Version**
+> Traditional LLM inference does the same computation per token regardless of the question's difficulty. Test-time compute changes this: the model generates additional internal reasoning tokens before answering, spending more total compute on harder problems. The per-token cost stays the same, but the token count goes up, sometimes by orders of magnitude. This makes latency unpredictable, blows up KV cache usage, complicates batching, and weakens speculative decoding.
+
+## Why this matters in production
+
+If you have used OpenAI's o1, DeepSeek-R1, or Gemini's thinking mode, you have probably noticed the response time varies wildly. Ask it "what's 2+2" and you get an answer in under a second. Ask it to solve a tricky math proof and it might sit there for 30 to 60 seconds before responding.
+
+That latency variance is not a bug. The model is deliberately spending more compute on harder problems. This is test-time compute in action, and it has real implications for how you run your serving infrastructure.
+
+---
+
+## What test-time compute actually is
+
+The traditional approach to making models smarter is to scale up at training time: more parameters, more data, more GPU hours. Test-time compute takes a different approach. You keep the model the same size but let it generate more tokens per request at inference time. The compute per individual token stays the same (it's the same forward pass through the same transformer), but the total compute per request goes up because the model produces many more tokens before arriving at an answer.
+
+There are a few ways models do this:
+
+**Chain of Thought (CoT)**: The model generates intermediate reasoning steps (sometimes called "thinking tokens") before producing the final answer. OpenAI's o1 can generate up to 25,000 reasoning tokens that are hidden from the user but still consume compute and memory. These tokens go through the same prefill/decode pipeline as regular output tokens.
+
+**Best-of-N sampling**: Generate N different candidate responses in parallel, then use a verifier or reward model to score them and pick the best one. If N=8, you are running 8x the decode compute for a single user request.
+
+**Tree search**: Instead of generating one linear chain of thought, explore multiple reasoning branches. Evaluate partial solutions, prune bad paths, backtrack. Similar in spirit to how AlphaGo searched game trees.
+
+**Self-consistency**: Generate multiple reasoning chains independently and take the majority vote on the final answer. Works surprisingly well for math and logic tasks without needing a separate verifier model.
+
+The key paper here is [Snell et al. (2024), "Scaling LLM Test-Time Compute Optimally"](https://arxiv.org/abs/2408.03314), which showed that adaptively allocating test-time compute per prompt (spend more on hard questions, less on easy ones) can outperform simply using a model with 14x more parameters. That's a striking result.
+
+---
+
+## What this does to your serving stack
+
+Most discussions of test-time compute focus on the ML side: better reasoning, higher benchmark scores. The infrastructure angle is worth looking at separately, because several assumptions that serving systems are built on start to break:
+
+### Latency becomes unpredictable
+
+Traditional LLM serving has relatively predictable latency. You know roughly how long prefill takes for a given prompt length, and you can estimate decode time from the expected output length. SLOs for TTFT and TPOT are straightforward to set.
+
+With test-time compute, the model decides how long to think. A simple request might generate 50 tokens. A complex one might generate 10,000 internal reasoning tokens before producing 200 tokens of actual response. Your P50 latency might be 3 seconds while your P99 is 90 seconds, for the same model and similar-looking prompts.
+
+Setting meaningful latency SLOs becomes much harder. You almost need task-level SLOs rather than model-level SLOs.
+
+### KV cache usage explodes
+
+Every reasoning token the model generates gets added to the [KV cache](/blog/kv-cache), exactly like a regular output token. If a model generates 10,000 reasoning tokens before answering, that's 10,000 additional KV entries per layer per head sitting in VRAM.
+
+For a 70B model with 80 layers, this can mean gigabytes of additional KV cache per request. Multiply that across a batch of concurrent users, and you can hit OOM on requests that would have been fine with a non-reasoning model. The memory pressure is directly proportional to how much the model "thinks."
+
+### Batching gets harder
+
+Continuous batching works well when requests finish at roughly similar times. The GPU stays busy because as one request finishes, another can take its slot. With test-time compute, you get massive variance in per-request compute. One request in the batch finishes in 2 seconds, another is still churning through reasoning tokens 40 seconds later.
+
+This creates a scheduling headache. The fast requests are done but their KV cache slots are freed while the slow request is still occupying its share of VRAM. Naive batching wastes the freed capacity. Smarter schedulers need to dynamically fill those slots with new requests, but the bookkeeping complexity goes up.
+
+### Best-of-N multiplies everything
+
+If your system uses Best-of-N sampling with N=8, every single user request becomes 8 parallel decode streams. Your effective batch size multiplies by N. Your KV cache usage multiplies by N. Your GPU compute multiplies by N. And at the end, you throw away 7 of the 8 results.
+
+This is one of those techniques that sounds elegant in a paper but gets expensive fast in production. In my experience, teams that try N=8 or higher at any real scale quickly realize the cost math does not work and either reduce N or switch to sequential self-refinement approaches.
+
+### Speculative decoding loses its edge
+
+[Speculative decoding](/blog/speculative-decoding) works by using a small draft model to predict what the big model will generate next. The draft model's predictions are good when the output is predictable (structured data, common phrases, factual recall).
+
+Reasoning tokens are, almost by definition, less predictable. The model is exploring novel chains of thought, and a small draft model is unlikely to guess the same reasoning path. Acceptance rates drop, and with them, the speedup from speculation. For workloads dominated by test-time compute, speculative decoding may provide little to no benefit.
+
+---
+
+## The compute-optimal routing question
+
+One of the more interesting findings from the Snell et al. paper is that not all prompts need the same amount of test-time compute. Easy questions get no benefit from extended thinking. Hard questions benefit a lot.
+
+This turns into a routing and scheduling problem at the infrastructure level. If you can classify prompt difficulty upfront (even roughly), you can route easy prompts to a fast path with minimal reasoning budget and hard prompts to a slow path with a larger budget. This saves compute on the easy requests without sacrificing quality on the hard ones.
+
+In practice, this difficulty classification is itself an open problem. You might use a smaller model to estimate difficulty, or use heuristics based on prompt length and domain. Either way, your serving system needs to support variable compute budgets per request, which most current frameworks do not handle natively.
+
+---
+
+## When more thinking hurts
+
+Test-time compute is not a free win. There are clear cases where it makes things worse:
+
+- **Simple factual queries** get slower for zero accuracy gain. "What year was Python released?" does not benefit from 10,000 reasoning tokens.
+- **Cost scales linearly** with thinking time (or worse, with Best-of-N). If you pay per output token, reasoning tokens that are hidden from the user still cost you.
+- **User experience** suffers when response time is unpredictable. Users tolerate a 2-second wait. A 60-second wait with no feedback feels broken, even if the answer is better.
+
+The ["Art of Scaling Test-Time Compute" (2025)](https://arxiv.org/abs/2504.00294) study confirmed that no single test-time compute strategy works best across all tasks and difficulty levels. The optimal approach depends on the model, the problem type, and the compute budget. There is no universal "just think harder" setting.
+
+---
+
+## Next Steps
+
+Test-time compute makes continuous batching and smart scheduling much more important than they already were. A future post on **Continuous Batching** will cover how serving engines dynamically manage requests that start and finish at different times, which is exactly the problem that variable-compute reasoning models amplify.
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
