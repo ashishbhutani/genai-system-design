@@ -1,0 +1,126 @@
+---
+title: "A Framework for GenAI System Design"
+description: "A 9-step framework for designing production systems around large language models. Covers requirements, architecture choices, data strategy, model selection, inference infrastructure, guardrails, evaluation, and deployment."
+pubDate: 2026-01-16
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure", "case-study", "Framework"]
+
+---
+
+*This post is for engineers designing production systems around LLMs, or preparing for GenAI system design interviews. No prior reading in this series is required.*
+
+> **The 30-Second Version**
+> Building systems around large language models involves a different set of decisions than traditional ML: retrieval strategy, prompt engineering, inference infrastructure, guardrails against hallucination, and cost management at the token level. This post introduces a 9-step framework that covers these decisions in a structured, repeatable way.
+
+## Why a GenAI-specific framework?
+
+GenAI systems involve concerns that don't show up in traditional ML pipelines. Decisions like build vs buy (API vs self-hosted), retrieval architecture (RAG vs fine-tuning), prompt versioning, and GPU-level serving optimization need their own structure. This framework is an attempt to organize those decisions into a sequence that works for both production design and interview settings.
+
+---
+
+## The Framework at a Glance
+
+![GenAI System Design Framework Pipeline](/diagrams/genai-framework-pipeline.png)
+
+| Step | Sub-topics |
+|------|------------|
+| **0. Why GenAI?** | Generative vs discriminative · Cost justification · Hybrid alternatives |
+| **1. Requirements** | Latency SLO · Cost budget · Privacy constraints · Scale numbers |
+| **2. GenAI Pattern** | API vs RAG vs Fine-tune vs Agents · System diagram |
+| **3. Data Strategy** | Knowledge base · Retrieval pipeline · Prompt engineering · Eval dataset · Context enrichment |
+| **4. Model Selection** | Foundation model choice · Fine-tune vs ICL · Multi-model routing |
+| **5. Inference Infra** | Serving framework · Batching · KV cache · GPU provisioning · Autoscaling |
+| **6. Guardrails** | Input filtering · Output validation · Fallback behavior |
+| **7. Evaluation** | Offline metrics · Online metrics · Human eval · A/B testing |
+| **8. Deploy & Monitor** | Cost/query · Latency optimization · Observability · Drift detection |
+
+---
+
+## Step 0: Why GenAI?
+
+Before designing anything, justify the approach. Not every problem needs an LLM.
+
+- **Generative vs discriminative**: Is the output open-ended text, or a label/score? If a classifier solves it, a simpler model will be cheaper and faster.
+- **Cost justification**: An LLM call costs roughly $0.01/query. A lightweight classifier costs a fraction of that. At scale, this difference matters.
+- **Hybrid alternative**: Route simple queries to a lookup or classifier. Send only the complex ones to the LLM. This is often a good starting point.
+
+Starting here forces you to justify the approach before committing to it. This step is numbered 0 because it's a gate, not a design step. It decides IF you use an LLM. Step 1 (Requirements) decides WHAT the system looks like. There's no point defining latency SLOs for a system you might not build with an LLM at all.
+
+## Step 1: Requirements
+
+- **Latency**: Can users wait 2-5 seconds for a streaming LLM response? Or does the product need sub-100ms?
+- **Cost budget**: At the expected query volume, what's the acceptable monthly spend?
+- **Privacy**: Can user data leave your infrastructure? If not, you're limited to self-hosted models.
+- **Scale**: QPS now, and projected QPS in 6 months. This shapes GPU provisioning, batching strategy, and whether you can get away with a managed API.
+
+## Step 2: GenAI Pattern
+
+This is the most important branching point in the design.
+
+- **API-based** (OpenAI, Gemini, Claude): Fastest to ship, highest per-query cost, least control over serving.
+- **RAG**: Retrieve relevant documents, stuff them into context, generate. Best for knowledge-intensive tasks where the model needs access to your data.
+- **Fine-tuning**: When you need domain-specific behavior that prompting alone can't teach.
+- **Agents**: When the task requires multi-step reasoning, tool use, or decisions based on intermediate results. Knowing when NOT to use agents is just as important.
+
+Draw the system diagram here. Components, data paths, external dependencies.
+
+![Architecture Decision Tree](/diagrams/genai-architecture-decision-tree.png)
+
+## Step 3: Data Strategy
+
+This step has five distinct sub-problems.
+
+- **3a. Knowledge base**: What documents, FAQs, policies, and data sources feed the system? What's the update cadence? Where are the coverage gaps?
+- **3b. Retrieval pipeline**: How do you chunk documents? What embedding model? What vector store? Semantic search, keyword search, or hybrid with reranking? (For a deep dive, see the [Vector Search](/blog/vector-search) post.)
+- **3c. Prompt engineering**: System prompt design, few-shot examples, output formatting. Prompt versioning matters here: how do you review, A/B test, and roll back prompt changes in production?
+- **3d. Eval dataset**: Ground truth Q&A pairs, edge cases, adversarial inputs. Without this, you can't measure anything.
+- **3e. Context enrichment**: What user-specific data does the model need at query time? If a customer asks "where's my order?", the LLM needs their order status, tracking number, and customer tier injected into the context. Think of this as the GenAI equivalent of an online feature store.
+
+## Step 4: Model Selection
+
+- **Foundation model**: GPT-4o vs Claude vs Gemini vs open-source (Llama, Mistral). The trade-off is always cost vs quality vs latency.
+- **Fine-tune vs in-context learning**: Fine-tuning gives better quality at higher upfront cost. ICL is flexible and requires no training, but burns more tokens per request.
+- **Multi-model routing**: Use a cheap, fast model for simple queries and an expensive model for complex reasoning. A routing layer decides based on input complexity. This can cut costs without hurting quality on hard queries.
+
+## Step 5: Inference Infrastructure
+
+This is where the system design gets concrete.
+
+- **Serving framework**: vLLM, TGI, TensorRT-LLM. [Continuous batching](/blog/disaggregated-inference) is table stakes at any real scale.
+- **KV cache management**: [PagedAttention](/blog/paged-attention) for memory efficiency. Prefix caching for shared system prompts across requests.
+- **GPU provisioning**: How many GPUs, what type (A100 vs H100), tensor parallelism for models that don't fit on a single GPU.
+- **Autoscaling**: Scale on QPS or GPU utilization? What's the cold start latency when spinning up new replicas?
+- **Disaggregated inference**: For workloads with mixed prompt lengths, [separating prefill and decode](/blog/disaggregated-inference) into different GPU pools can improve utilization.
+
+## Step 6: Guardrails and Safety
+
+- **Input filtering**: Prompt injection detection, PII scrubbing before data reaches the model.
+- **Output validation**: Hallucination detection via retrieval grounding. [Structured output enforcement via logit masking](/blog/logits-and-sampling) when you need guaranteed JSON or schema compliance.
+- **Fallback behavior**: What happens when the model doesn't know? "I don't know" is better than a confident hallucination. Escalate to a human when confidence is low.
+
+## Step 7: Evaluation
+
+GenAI evaluation is harder because you're evaluating generated text, not a binary prediction.
+
+- **Offline metrics**: Retrieval recall, factual accuracy, ROUGE for summarization tasks.
+- **Online metrics**: Task completion rate, user thumbs up/down, session length.
+- **Human evaluation**: Often the gold standard for open-ended generation. Expensive, but sometimes the only way to measure quality meaningfully.
+- **A/B testing**: Compare prompt versions, model versions, or retrieval strategies side by side. Prompt changes can shift output quality in ways that automated metrics don't always catch.
+
+## Step 8: Deployment and Monitoring
+
+- **Cost per query**: Break down the cost (model inference, retrieval, compute). Know where to cut first when the bill grows.
+- **Latency optimization**: Cache frequent queries, stream responses to reduce perceived latency, batch requests where possible.
+- **Observability**: Log prompts, responses, and retrieval results. When a user reports a bad answer, you need to trace back through the entire pipeline.
+- **Drift detection**: Retrieval quality degrades as the knowledge base changes. Model behavior shifts when the provider updates their API. [Embedding staleness](/blog/vector-search) is a real problem. Monitor all of it.
+
+---
+
+## How to Use This Framework
+
+Not every system needs all 9 steps. A simple chatbot with a managed API might have a lightweight Step 5 (inference infra). A classification task might not pass Step 0. The framework gives you structure without rigidity: walk through the steps in order, skip what doesn't apply, and go deep on the 2-3 that matter most for the specific problem.
+
+Future posts in this series will use this framework to walk through specific case studies end to end.
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
