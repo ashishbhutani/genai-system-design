@@ -1,0 +1,389 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "mcp-excalidraw-server",
+  "elements": [
+    {
+      "id": "mm7nncigm4ziofkv0o",
+      "type": "text",
+      "x": 290,
+      "y": 25,
+      "strokeColor": "#1e1e1e",
+      "text": "Multi-Agent Orchestration Architecture",
+      "fontSize": 24,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1
+    },
+    {
+      "id": "worker-zone",
+      "type": "rectangle",
+      "x": 800,
+      "y": 100,
+      "width": 290,
+      "height": 510,
+      "backgroundColor": "#e9ecef",
+      "strokeColor": "#868e96",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "opacity": 50,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:19:09.586Z",
+      "version": 2
+    },
+    {
+      "id": "mm7nncig4zo0zfjny3k",
+      "type": "text",
+      "x": 790,
+      "y": 115,
+      "strokeColor": "#868e96",
+      "text": "Worker Agents",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1
+    },
+    {
+      "id": "user-box",
+      "type": "ellipse",
+      "x": 40,
+      "y": 295,
+      "width": 140,
+      "height": 70,
+      "backgroundColor": "#a5d8ff",
+      "strokeColor": "#1971c2",
+      "strokeWidth": 2,
+      "label": {
+        "text": "User Request"
+      },
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1
+    },
+    {
+      "id": "api-gateway",
+      "type": "rectangle",
+      "x": 240,
+      "y": 300,
+      "width": 160,
+      "height": 70,
+      "backgroundColor": "#e9ecef",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "label": {
+        "text": "API Gateway"
+      },
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1
+    },
+    {
+      "id": "supervisor",
+      "type": "rectangle",
+      "x": 460,
+      "y": 260,
+      "width": 180,
+      "height": 150,
+      "backgroundColor": "#ffd8a8",
+      "strokeColor": "#e8590c",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Supervisor Node\nBGE-micro + k-NN\n< 15ms routing"
+      },
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:19:05.093Z",
+      "version": 2
+    },
+    {
+      "id": "tracking-agent",
+      "type": "rectangle",
+      "x": 820,
+      "y": 140,
+      "width": 240,
+      "height": 100,
+      "backgroundColor": "#b2f2bb",
+      "strokeColor": "#2f9e44",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Tracking Agent\nget_order_status API\nCheap L4 GPUs"
+      },
+      "fontSize": 15,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:19:10.030Z",
+      "version": 2
+    },
+    {
+      "id": "policy-rag",
+      "type": "rectangle",
+      "x": 820,
+      "y": 290,
+      "width": 240,
+      "height": 100,
+      "backgroundColor": "#eebefa",
+      "strokeColor": "#9c36b5",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Policy RAG Agent\nHybrid Search + Synthesis\nVector DB"
+      },
+      "fontSize": 15,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:19:10.475Z",
+      "version": 2
+    },
+    {
+      "id": "escalation",
+      "type": "rectangle",
+      "x": 820,
+      "y": 450,
+      "width": 240,
+      "height": 100,
+      "backgroundColor": "#ffc9c9",
+      "strokeColor": "#e03131",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Escalation Agent\nFrontier Model\n(GPT-4o / Claude 3.5)"
+      },
+      "fontSize": 15,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:19:10.812Z",
+      "version": 2
+    },
+    {
+      "id": "mm7nncihmx11shaz34r",
+      "type": "arrow",
+      "x": 187.97449109754933,
+      "y": 331.13440241382796,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          44.03118496699085,
+          1.6595304957022563
+        ]
+      ],
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "user-box",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "api-gateway",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mm7nncihxk07go6ed8",
+      "type": "arrow",
+      "x": 408,
+      "y": 335,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          44,
+          0
+        ]
+      ],
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.214Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "api-gateway",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "supervisor",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mm7nncih8g83s5yel2",
+      "type": "arrow",
+      "x": 677.1795895597943,
+      "y": 279.8608797078977,
+      "strokeColor": "#2f9e44",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Order status?"
+      },
+      "fontSize": 13,
+      "fontFamily": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          73.91668294937699,
+          -36.331928907320844
+        ]
+      ],
+      "createdAt": "2026-03-01T11:16:45.214Z",
+      "updatedAt": "2026-03-01T11:16:45.215Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "supervisor",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "tracking-agent",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mm7nncihl0gezma3f4d",
+      "type": "arrow",
+      "x": 677.9988511524318,
+      "y": 336.91523476529545,
+      "strokeColor": "#9c36b5",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Policy question?"
+      },
+      "fontSize": 13,
+      "fontFamily": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          54.00229769513635,
+          0.9152931812735119
+        ]
+      ],
+      "createdAt": "2026-03-01T11:16:45.215Z",
+      "updatedAt": "2026-03-01T11:16:45.215Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "supervisor",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "policy-rag",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mm7nncihfgscmiw8t4o",
+      "type": "arrow",
+      "x": 676.9820651769851,
+      "y": 397.63403645492383,
+      "strokeColor": "#e03131",
+      "strokeWidth": 2,
+      "label": {
+        "text": "Complex dispute?"
+      },
+      "fontSize": 13,
+      "fontFamily": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          86.64193025209045,
+          48.46074064947436
+        ]
+      ],
+      "createdAt": "2026-03-01T11:16:45.215Z",
+      "updatedAt": "2026-03-01T11:16:45.215Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "supervisor",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "escalation",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mm7ntcsewi284xv4ls",
+      "type": "text",
+      "x": 467,
+      "y": 298,
+      "strokeColor": "#7d3a00",
+      "text": "Supervisor Node\nBGE-micro + k-NN\n< 15ms routing",
+      "fontSize": 15,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:21:25.505Z",
+      "updatedAt": "2026-03-01T11:21:25.505Z",
+      "version": 1
+    },
+    {
+      "id": "mm7ntcsedvrtihlsouu",
+      "type": "text",
+      "x": 830,
+      "y": 165,
+      "strokeColor": "#1a5e2a",
+      "text": "Tracking Agent\nget_order_status API\nCheap L4 GPUs",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:21:25.505Z",
+      "updatedAt": "2026-03-01T11:21:25.505Z",
+      "version": 1
+    },
+    {
+      "id": "mm7ntcsey2haoarmzcf",
+      "type": "text",
+      "x": 830,
+      "y": 313,
+      "strokeColor": "#5c1a7a",
+      "text": "Policy RAG Agent\nHybrid Search + Synthesis\nVector DB",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:21:25.505Z",
+      "updatedAt": "2026-03-01T11:21:25.505Z",
+      "version": 1
+    },
+    {
+      "id": "mm7ntcse9ri0yr91w2",
+      "type": "text",
+      "x": 830,
+      "y": 473,
+      "strokeColor": "#7d0000",
+      "text": "Escalation Agent\nFrontier Model\n(GPT-4o / Claude 3.5)",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-01T11:21:25.505Z",
+      "updatedAt": "2026-03-01T11:21:25.505Z",
+      "version": 1
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": null
+  }
+}
