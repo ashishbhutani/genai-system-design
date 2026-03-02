@@ -25,3 +25,5 @@ pnpm-debug.log*
 
 # agent workflows (local only)
 .agent/
+
+excalidraw.log
