@@ -25,5 +25,8 @@ pnpm-debug.log*
 
 # agent workflows (local only)
 .agent/
+.claude/
+.vscode
+
 
 excalidraw.log
