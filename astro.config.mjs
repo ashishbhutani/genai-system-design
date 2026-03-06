@@ -10,6 +10,7 @@ export default defineConfig({
 	integrations: [
 		mdx(),
 		sitemap({
+			filter: (page) => !page.includes('/rss.xml'),
 			serialize(item) {
 				item.lastmod = new Date().toISOString();
 				return item;

@@ -1,0 +1,455 @@
+---
+title: "Case Study: Designing a GitHub Copilot-Style Code Completion Backend"
+description: "A Staff+ GenAI system design case study. How do you build code autocomplete at 1B tokens per day, under 100ms p99 latency, across millions of developers?"
+pubDate: "Mar 07 2026"
+author: "Ashish Bhutani"
+tags: ["GenAI", "System Design", "LLM Serving", "Infrastructure"]
+---
+
+## Problem Statement
+
+Code autocomplete is one of the few GenAI products where the latency constraint is non-negotiable. If a suggestion arrives after the developer has already typed the next character, it's worthless. Worse, it's distracting.
+
+The system we're designing is a **code completion backend** in the style of GitHub Copilot. It runs inside the IDE, predicting what the developer will type next based on the code around their cursor. The developer never waits for it. They type, and completions appear inline if the system has something useful to offer. If it's too slow, the completion gets cancelled silently and the developer never sees it.
+
+This is fundamentally different from a chatbot or a summarizer. There's no "loading" spinner. There's no "please wait." The model either keeps up with the developer's keystroke rhythm, or it gets thrown away.
+
+### Who uses this system
+
+Three groups, each with different needs:
+
+**The developer** sees inline suggestions in their editor. They accept, reject, or ignore them without breaking flow. The experience should feel like a fast colleague who occasionally finishes your sentences. When it works, you barely notice it's there. When it doesn't, it's the first thing you turn off.
+
+**The platform engineering team** runs the backend. They care about GPU utilization (cost), request throughput, p99 latency, cache hit rates, and the operational health of a system that fields millions of requests per hour with significant burst patterns (9am Monday looks nothing like 2am Sunday).
+
+**The enterprise customer** cares about data isolation, code privacy, and compliance. Their proprietary code is being sent to a model. They need guarantees about where that data goes, how long it's retained, and whether it's ever used for training.
+
+### Why this is hard
+
+Three constraints fight each other:
+
+- **Latency**: p99 under 100ms for inline completions. That's the total budget from the moment the IDE sends a request to the moment the first token arrives back. This leaves roughly 60ms for model inference after accounting for network and context assembly.
+- **Quality**: suggestions need to be syntactically valid, contextually relevant, and worth accepting. Low acceptance rates mean the system is burning GPU cycles to produce noise.
+- **Cost**: at 1B tokens per day, model serving cost is a significant line item. Every optimization that reduces per-token cost (quantization, caching, smaller models) also risks degrading quality or adding operational complexity.
+
+Most serving systems optimize for one of these. A batch summarizer optimizes for throughput. A chatbot optimizes for quality with a generous latency budget. Code completion has to solve all three simultaneously, under the hardest latency constraint of the three.
+
+## Framing the System
+
+### Inputs
+
+Every request carries:
+
+- **Cursor position**: which file, which line, which column.
+- **Prefix**: the code above the cursor, up to some token budget. This is the "what came before" that the model uses to predict what comes next.
+- **Suffix**: the code below the cursor. This is what separates modern code completion from older left-to-right text generation. The model sees what's on both sides and fills the gap.
+- **Adjacent file context**: the most recently opened or edited files. If the developer just wrote a function signature in `utils.py` and now they're in `main.py`, the model should know about that function.
+- **Repo-level metadata**: language, framework, import patterns.
+
+### Outputs
+
+- A streamed sequence of tokens representing the suggested completion. Streaming matters because the developer should see the first few tokens before the model has finished generating the full suggestion.
+- The output must be syntactically valid (or at least not obviously broken) in the target language.
+- Each completion also carries metadata: model latency, cache hit status, and a request ID for telemetry.
+
+### Constraints
+
+| Property | Target |
+|---|---|
+| Inline completion TTFT (time to first token), p99 | < 100ms |
+| Fill-in-the-middle TTFT, p99 | < 150ms |
+| Whole-function / docstring TTFT, p99 | < 500ms |
+| Copilot Chat TTFT, p99 | < 2s |
+
+The first row is the one that defines the architecture. Everything else is comparatively relaxed.
+
+### What this system is not
+
+It's not a chatbot attached to a code editor. Chatbots have a request-response interaction model where the user waits. Code completion has a fire-and-forget model where the system either keeps up or gets cancelled. This distinction drives almost every architectural choice.
+
+It's also not a code search engine. The model is not retrieving existing code from the repo. It's generating new code conditioned on the surrounding context. Retrieval is part of the context assembly pipeline, but the output is generative.
+
+## Step 0: Why GenAI?
+
+Traditional IDE autocomplete uses the language server protocol (LSP). The language server parses the AST, resolves types, and offers completions based on available symbols: method names, variable names, type-valid arguments. This works well for what it does.
+
+What it can't do:
+
+- Complete a function body from a docstring
+- Infer what the developer intends from a partial pattern (e.g., seeing `for i in range(len(` and predicting the developer is about to write a loop that zips two lists)
+- Write boilerplate that's contextually correct but doesn't exist yet in the AST
+- Handle natural language comments that describe the code that should follow
+
+These require understanding intent from partial context, which is exactly what language models are good at.
+
+### Where deterministic logic is enough
+
+Not everything needs a model:
+
+- **Request routing**: which model pool handles this request type? Deterministic rule.
+- **Context assembly**: which files to include, in what order, up to what token budget? Rules + recency heuristics.
+- **Cache lookup**: does a prefix cache entry exist for this context? Hash comparison.
+- **Response filtering**: does the completion parse in the target language? AST validation.
+- **Auth and tenant isolation**: never involves a model.
+
+### Where the model is needed
+
+The model is needed at exactly one point: generating the completion tokens. Everything else is orchestration, caching, filtering, and delivery.
+
+This is worth stating clearly because a common over-engineering pattern is to add models at multiple stages (a model for context ranking, a model for quality scoring, a model for safety filtering on top of the generation model). Each additional model call adds latency. In a 100ms budget, there's room for exactly one model call, and it better be fast.
+
+### Cost and value framing
+
+The value of a code completion system is proportional to its acceptance rate. If 30% of suggestions are accepted, each accepted suggestion saves the developer 5-30 seconds of typing. At 1M active developers generating 200 suggestions per day, a 30% acceptance rate means 60M accepted suggestions per day. At even 5 seconds saved per acceptance, that's 300M seconds of developer time saved per day, or roughly 3,500 developer-years per year.
+
+The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quantized to INT8, you're looking at a fleet of 50-100 GPUs depending on batch sizes and cache hit rates. At cloud pricing, that's a significant but not unreasonable cost against the developer productivity gain.
+
+The math works if the acceptance rate stays above roughly 25%. Below that, the system is burning GPU to produce noise.
+
+## Step 1: Requirements
+
+### Functional requirements
+
+1. **Inline code completion**: predict the next 1-5 lines based on cursor position and surrounding code.
+2. **Fill-in-the-middle (FIM)**: given code above and below the cursor, generate what goes in between. This is the primary mode for code completion, introduced by [Bavarian et al., 2022](https://arxiv.org/abs/2207.14255).
+3. **Multi-line / whole-function completion**: generate larger blocks when triggered explicitly (e.g., after a function signature or docstring).
+4. **Streaming output**: tokens arrive incrementally. The developer sees partial completions building up.
+5. **Cancellation**: if the developer types another character before the completion arrives, the request is cancelled server-side. No wasted GPU cycles on abandoned generations.
+
+### Non-functional requirements
+
+**Latency**
+- Inline completion TTFT p99 < 100ms
+- Cancellation propagation < 10ms (from IDE signal to GPU preemption)
+- First visible suggestion appears within one keystroke pause (typically 75-150ms after last keypress)
+
+**Throughput**
+- Sustained: ~11,500 tokens per second (~1B tokens per day)
+- Burst: 3x sustained during peak hours (9am-11am weekday, regionally shifted)
+- Request rate: 200-500 requests per second sustained
+
+**Availability**
+- 99.9% for inline completions (graceful degradation: if the model is slow, the developer just doesn't see a suggestion. No error displayed.)
+
+**Privacy and compliance**
+- Code context is not persisted beyond the request lifecycle unless the customer explicitly opts in for telemetry
+- Tenant isolation: enterprise customer A's code context never influences completions for customer B
+- No training on customer code without explicit consent
+
+### Scale assumptions
+
+| Metric | Value |
+|---|---|
+| Active developers | 1M+ |
+| Requests per day | ~50M (many are cancelled before completion) |
+| Tokens generated per day | ~1B |
+| Average completion length | 30-80 tokens |
+| Average prefix context | 1,500-2,000 tokens |
+| Average suffix context | 500-1,000 tokens |
+
+### Quality metrics
+
+**Primary metric: acceptance rate.** This is the fraction of displayed suggestions that the developer accepts. It's the single best proxy for whether the system is useful. Industry benchmarks for code completion sit around 25-35%.
+
+**Supporting metrics:**
+- **Persistence rate**: of accepted completions, how many are still in the codebase 30 minutes later? This catches "accepted but immediately edited away" cases.
+- **Syntactic validity**: fraction of suggestions that parse in the target language.
+- **Cancellation rate**: fraction of requests cancelled by new keystrokes before completion arrives. High cancellation means the system is too slow, too eager to trigger, or both.
+- **Cost per accepted token**: total serving cost divided by tokens that were actually accepted. This is the real unit economics metric.
+
+### Trade-offs to acknowledge
+
+| Decision | Option A | Option B | Cost of getting it wrong |
+|---|---|---|---|
+| One model vs tiered by request type | Simpler deployment | Better latency/cost per tier | Overspend on inline or under-serve on chat |
+| Aggressive batching vs single-request | Higher GPU utilization | Lower TTFT | Inline TTFT SLO breach at scale |
+| Large context window vs tight budget | Higher quality completions | Lower latency, fewer cache misses | Quality collapse or timeout |
+| Speculative decoding on vs off | 2-3x TTFT improvement | Simpler serving stack | Inline SLO unachievable without it |
+| Prefix caching vs stateless serving | Massive prefill savings | No cache invalidation complexity | Every request pays full prefill cost |
+
+## Step 2: Architecture
+
+### The first design decision: tiered serving
+
+Not all request types deserve the same model. Inline completion needs a small, fast model. Copilot Chat can afford a larger, slower model. Trying to serve both from the same model pool means either inline is too slow (if you use the quality model) or chat is too dumb (if you use the fast model).
+
+The serving tier split:
+
+| Tier | Model size | Quantization | Use case | Latency budget |
+|---|---|---|---|---|
+| Fast | 3-7B | INT4/INT8 | Inline completion, FIM | < 60ms TTFT |
+| Quality | 30-70B | INT8/FP8 | Whole-function, docstring, chat | < 500ms TTFT |
+
+The fast tier is where 80-90% of requests go. It's the one that needs to be hyper-optimized.
+
+### System components
+
+**IDE Plugin**
+
+The plugin is the first line of defense against unnecessary requests. It implements:
+- **Keystroke debounce**: don't send a request on every keystroke. Wait for 75ms of idle time after the last keypress. This alone eliminates 60-70% of potential requests.
+- **Cancellation on new input**: if the developer types while a request is in flight, cancel it immediately. The IDE sends a cancellation signal; the gateway propagates it to the serving pool.
+- **Local filtering**: if the cursor is inside a comment, a string literal, or a position where autocomplete is unlikely to help, skip the request entirely.
+
+**Gateway Service**
+
+Terminates the request, handles auth, and routes to the appropriate serving tier based on request type. Also handles:
+- Prefix cache lookup: before routing to the model, check if a cached KV tensor exists for this context prefix. If yes, attach the cache reference to the request so the model pool can skip prefill.
+- Rate limiting per tenant.
+- Streaming response relay: the gateway keeps the HTTP/2 or WebSocket connection to the IDE open and relays tokens as they arrive from the model pool.
+
+**Context Assembler**
+
+Builds the model prompt from raw IDE state. This is a separate stage, not inline with the model, because context assembly logic changes frequently (new heuristics, different file priority rules, repo-level retrieval integration) and should not require redeploying the model serving infrastructure.
+
+Context assembly order of priority:
+1. Current file prefix (code above cursor)
+2. Current file suffix (code below cursor)
+3. Recently edited files, ranked by edit recency
+4. Cross-file retrieval results (semantically similar code from the repo)
+
+Total token budget: ~2,000 tokens for the fast tier, ~4,000 for the quality tier.
+
+The output is a FIM-formatted prompt:
+```
+<prefix>
+{assembled prefix context}
+<suffix>
+{assembled suffix context}
+<middle>
+```
+
+The model generates tokens to fill the `<middle>` section.
+
+**Fast Model Serving Pool**
+
+A fleet of GPUs running the 3-7B code model. Optimized for TTFT, not throughput. Key configuration choices:
+
+- **Continuous batching** with small max batch size (4-8). Larger batches improve throughput but increase TTFT because new requests wait for the current batch to finish its decode step. At a 60ms TTFT budget, you can't afford to wait behind 32 other requests.
+- **Speculative decoding**: a tiny draft model (e.g. 500M parameters) proposes 4-6 tokens per step. The main model verifies them in one forward pass. For code, where patterns are repetitive (closing brackets, common idioms, boilerplate), the acceptance rate of speculative tokens is high (60-80%). This gives an effective 2-3x speedup on decode. ([Leviathan et al., 2023](https://arxiv.org/abs/2211.17192))
+- **KV cache reuse from prefix cache**: if the gateway found a prefix cache hit, the model starts decode immediately without running prefill. This is the single biggest latency win. Prefill on 2,000 tokens at a 7B model takes 15-25ms. Skipping it entirely reclaims that budget for decode.
+
+**Quality Model Serving Pool**
+
+A fleet running the larger model for chat, whole-function, and docstring requests. These have a more relaxed latency budget (500ms-2s TTFT) so the optimization profile is different:
+- Larger batch sizes are acceptable (16-32).
+- No speculative decoding needed (the latency budget is generous enough).
+- Longer context windows (4K-8K tokens) for better quality on complex completions.
+
+**Prefix Cache Layer**
+
+One of the most important infrastructure components in this system. Covered in detail in the next section.
+
+### Data stores
+
+| Store | What it holds | Access pattern |
+|---|---|---|
+| Prefix KV Cache (GPU memory / Redis) | Computed KV tensors for common context prefixes | Read-heavy, TTL-based eviction |
+| Vector Index | Repo-level embeddings for cross-file retrieval | Read at context assembly time |
+| S3 / Blob | Completion telemetry logs, accepted/rejected signals | Write-heavy, async |
+| Postgres | Usage metrics, billing, per-user acceptance rates | Write-heavy, periodic aggregation |
+
+Here's how these components connect:
+
+![Copilot-style code completion architecture: IDE Plugin to Gateway to Context Assembler, routing to Fast and Quality model pools, with Prefix KV Cache, Vector Index, and S3/Postgres as supporting stores](/diagrams/copilot-architecture.png)
+
+### Architecture flow for an inline completion request
+
+The sequence, with approximate latency at each stage:
+
+1. Developer pauses typing for 75ms. IDE plugin fires a request. (~0ms, client-side)
+2. Request hits **Gateway**. Auth check, prefix cache lookup. (~5ms)
+3. **Context Assembler** builds the FIM prompt from cursor context + adjacent files. (~10ms)
+4. Request is routed to **Fast Model Pool**. If prefix cache hit, skip prefill. (~2ms routing)
+5. Model runs decode with speculative decoding. First token emitted. (~40-50ms with cache hit, ~60-70ms without)
+6. Tokens stream back through Gateway to IDE. Developer sees suggestion building up.
+
+Total: ~60-70ms with cache hit, ~80-90ms without. Both within the 100ms p99 budget.
+
+If the developer types during steps 2-5, a cancellation signal propagates through Gateway to the model pool. The GPU preempts the generation and the batch slot is freed for the next request.
+
+## Step 3: The Latency Problem
+
+The 100ms budget is what makes this system interesting from a design perspective. Let's break down where every millisecond goes.
+
+### Budget allocation
+
+| Stage | Budget (ms) | Notes |
+|---|---|---|
+| Network round trip (IDE to datacenter) | 15-25 | Varies by geography. Edge PoPs help. |
+| Gateway + auth + cache lookup | 3-5 | Must be fast. No database calls in this path. |
+| Context assembly | 5-10 | Token counting, file ranking, FIM formatting |
+| Model prefill (on cache miss) | 15-25 | Processing the 2K token prompt. Eliminated on cache hit. |
+| Model decode (first token) | 10-20 | Depends on model size, quantization, batch position |
+| Response delivery | 2-5 | Streaming first token back |
+
+On a cache hit, the total is roughly 35-65ms. On a cache miss, 50-85ms. Both are within budget for p95. Hitting p99 under 100ms requires the cache hit rate to stay above roughly 60%.
+
+### How to hit < 60ms TTFT on the model
+
+**Small model, aggressively quantized.** A 7B model quantized to INT4 has a prefill throughput of roughly 10K-15K tokens per second on an H100, and decode latency for the first token around 8-12ms. A 70B model is 10x slower per step. The latency constraint rules out large models for inline completion.
+
+**Speculative decoding.** The draft model proposes tokens cheaply. The verifier model accepts or rejects them in a single forward pass. For code, where the next token is often predictable (closing a bracket, completing a common pattern), the draft acceptance rate is high. This effectively reduces the number of forward passes needed per generated token. On typical code completions, you get 2-3 tokens per forward pass instead of 1.
+
+**Prefix KV cache.** If 2,000 tokens of context are the same as a previous request (same file header, same imports, same function above the cursor), the prefill computation can be skipped entirely. The KV tensors from the previous prefill are loaded from cache and decode starts immediately. This turns a 15-25ms prefill into a < 1ms cache load.
+
+**Continuous batching with small batch caps.** Traditional batching waits until N requests accumulate, processes them together, then returns results. This is great for throughput and terrible for latency. Continuous batching (used by [vLLM](https://github.com/vllm-project/vllm) and [SGLang](https://github.com/sgl-project/sglang)) allows new requests to join the batch between decode steps without waiting for existing requests to finish. But even with continuous batching, each decode step takes longer when the batch is bigger because of the increased memory bandwidth demand. Capping the batch size at 4-8 for the fast tier keeps per-step latency predictable.
+
+**Hardware selection.** Decode is memory-bandwidth-bound. The [H100](https://www.nvidia.com/en-us/data-center/h100/) has HBM3 (High Bandwidth Memory, 3rd gen) at 3.35 TB/s. The [A100](https://www.nvidia.com/en-us/data-center/a100/) has HBM2e at 2 TB/s. For a decode-dominant workload like code completion (short prefill, many decode steps), the H100 gives roughly 1.5-1.7x faster decode. That 1.7x matters when your budget is 60ms.
+
+## Step 4: Prefix Caching at Scale
+
+Prefix caching is the single most impactful optimization for code completion latency, and also the most complex to operate. It deserves its own section.
+
+### The insight
+
+Millions of developers work on thousands of repos. Within any given repo, the boilerplate at the top of a file (imports, class definitions, configuration blocks) is identical across contributors. If ten engineers are editing files in the same Python package, the first 1,500 tokens of their prompts are likely identical: the same imports, the same base class, the same constants.
+
+Without prefix caching, every one of those requests pays the full prefill cost: the model processes all 1,500 shared tokens plus the 500 unique tokens near the cursor.
+
+With prefix caching, the KV tensors for those shared 1,500 tokens are computed once and reused. Each subsequent request only runs prefill on the unique 500 tokens, then starts decode. That's a 3x reduction in prefill time.
+
+### Cache key design
+
+The cache key is a hash of the token sequence. Two requests with identical token prefixes up to some split point will share a cache entry. The split point is chosen at the boundary between "likely shared" context (file header, imports) and "per-request" context (the code immediately around the cursor).
+
+In practice:
+- **Global prefix**: language model system prompt + FIM formatting tokens. Shared across all users of the same model. Cache hit rate: ~100%.
+- **Repo-level prefix**: import block + top-level definitions for the current package. Shared across users in the same repo. Cache hit rate: 40-70% depending on repo activity.
+- **File-level prefix**: the top of the current file up to the cursor function. Shared across edits within the same file by the same user. Cache hit rate: 70-90% for active editing sessions.
+
+### Cache storage
+
+KV tensors are large. For a 7B model with 32 layers, 32 heads, 128 dimensions per head, in FP16, the KV cache for 1,000 tokens is:
+
+```
+32 layers x 32 heads x 128 dims x 1000 tokens x 2 (K+V) x 2 bytes
+= ~524 MB
+```
+
+You can't store many of these in GPU HBM. A 80GB H100 can hold roughly 150 prefix cache entries of 1K tokens alongside the model weights. That's not a lot.
+
+The tiered approach:
+- **L1 (GPU HBM)**: hottest entries. The 50-100 most frequently accessed prefixes. Sub-millisecond load time.
+- **L2 (Host DRAM)**: warm entries. Thousands of prefixes. 1-3ms load time over PCIe.
+- **L3 (Redis cluster)**: cold entries across the fleet. 5-10ms load time over network.
+
+![Prefix Cache 3-Tier Storage showing L1 GPU HBM, L2 Host DRAM, and L3 Redis Cluster with eviction flows](/diagrams/copilot-prefix-cache.png)
+
+An L1 hit means near-zero prefill cost. An L2 hit is still a significant win (3ms load vs 20ms prefill). An L3 miss means full prefill, which is fine as long as it happens less than 40% of the time.
+
+### Cache invalidation
+
+When a file changes, the cache entries derived from it need to be invalidated. A developer editing line 15 of a 200-line file doesn't invalidate the cache for lines 1-14 (the import block is unchanged), but does invalidate entries that included lines 15+.
+
+The invalidation is token-position-aware: the cache stores which token range each entry covers, and edits that fall outside that range don't trigger invalidation. This keeps the hit rate high during active editing sessions, which is exactly when low latency matters most.
+
+Branch switches and git pull events trigger broader invalidation for the affected files.
+
+## Step 5: Context Assembly
+
+### Fill-in-the-Middle (FIM)
+
+Traditional code generation is left-to-right: the model sees everything before the cursor and predicts what comes next. This misses a critical signal: the code that comes after the cursor.
+
+FIM ([Bavarian et al., 2022](https://arxiv.org/abs/2207.14255)) restructures the prompt so the model sees both sides. The prompt format:
+
+```
+<prefix>
+import numpy as np
+from sklearn.metrics import accuracy_score
+
+def evaluate_model(model, X_test, y_test):
+<suffix>
+    return {"accuracy": acc, "predictions": preds}
+<middle>
+```
+
+The model generates tokens to fill the `<middle>` section. It knows the function signature (from prefix) and the return statement (from suffix), so it can generate the body that makes both ends consistent.
+
+This is not a minor detail. FIM increases acceptance rate on code completion by 15-25% compared to prefix-only generation, because the model can infer what the developer wants from the code structure on both sides.
+
+### What goes in the prompt
+
+The token budget is tight (2,000 tokens for the fast tier). Every token that goes into the prompt costs prefill time and takes space away from other context. The allocation priority:
+
+1. **Current file prefix** (above cursor): highest priority. This is the most relevant context. Truncated from the bottom of the file upward to fit budget.
+2. **Current file suffix** (below cursor): second priority. Typically 500-800 tokens.
+3. **Recently opened files**: sorted by most-recently-edited. Include the most relevant function signatures and class definitions, not entire files. Each adjacent file gets 200-300 tokens.
+4. **Cross-file retrieval results**: for large repos, a vector index over the codebase identifies semantically similar functions. These get included as additional prefix context.
+
+### What to exclude
+
+- Auto-generated files (protobuf stubs, lockfiles, build artifacts)
+- Minified or compressed files
+- Files exceeding a size threshold (> 50KB typically means generated or data)
+- Binary-adjacent content
+
+### Token budget management
+
+The context assembler tracks token counts precisely (using the same tokenizer as the model, not character counts). When the budget is exceeded, it truncates in priority order: retrieval results first, then adjacent files, then suffix, and only as a last resort, the near-cursor prefix.
+
+This priority order matters because experiments consistently show that near-cursor context has the highest impact on acceptance rate, while distant retrieval results have the lowest.
+
+## Failure Modes
+
+### Model latency spike
+
+If the fast model pool hits a latency spike (GPU thermal throttling, batch size growth, cache miss storm), inline completions start timing out. The IDE plugin's cancellation logic protects the developer experience: they just don't see suggestions for a few seconds. But the GPU is still wasting cycles on requests that will be cancelled.
+
+**Mitigation**: the gateway tracks rolling p99 latency. If it exceeds 80ms (getting close to the 100ms budget), it starts rejecting new requests before they reach the model pool. The model pool drains its queue, latency recovers, and requests resume. This shed-load-early pattern is better than letting the queue build up and having every request timeout.
+
+### Prefix cache miss storm
+
+When a large group of developers start a new session simultaneously (Monday morning, post-deploy restart), the prefix cache is cold. Every request pays full prefill cost. The model pool's effective throughput drops because prefill is more expensive than decode, and TTFT spikes.
+
+**Mitigation**: cache warming. When a repo becomes active (first request from that repo in a session), proactively compute and cache the common file-level prefixes in the background. This preemptive warming means the second and subsequent requests from that repo hit the cache.
+
+### Context assembly returning poor context
+
+If the context assembler includes irrelevant files or truncates the prefix too aggressively, the model generates completions that don't match the developer's intent. Acceptance rate drops, cancellation rate rises.
+
+**Mitigation**: A/B testing on context assembly strategies. Track acceptance rate per strategy variant. The context assembly pipeline is the fastest thing to iterate on (it's deterministic code, not model weights), so it's the right place to experiment.
+
+### Speculative decoding draft divergence
+
+If the draft model's token predictions diverge significantly from what the verifier would produce, the speculation acceptance rate drops and speculative decoding becomes overhead rather than speedup (the draft model runs but its tokens get rejected, wasting time).
+
+**Mitigation**: monitor the speculation acceptance rate. If it drops below 50% for a particular language or code pattern, fall back to standard decode for those requests. The draft model's accuracy varies by language: it tends to be better on Python (uniform style) and worse on languages with complex syntax (Rust, Haskell).
+
+## Operational Concerns
+
+### GPU fleet sizing
+
+Back-of-envelope for the fast tier:
+
+- 1B tokens per day = ~11,500 tokens per second sustained
+- 3x burst = ~34,500 tokens per second peak
+- 7B INT4 model on H100: ~2,000-3,000 tokens per second per GPU (with continuous batching and speculative decoding)
+- Need ~12-17 GPUs for sustained, ~35-50 for burst
+- With redundancy and capacity margin: 50-80 H100s for the fast tier
+
+The quality tier handles 10-20% of request volume with more relaxed latency, so a smaller pool (10-20 GPUs of the larger model) is likely sufficient.
+
+### Cost per accepted token
+
+Total GPU cost (fast tier, 60 H100s at ~$3/hr cloud pricing) = ~$4,300/day = ~$130K/month.
+
+At 1B tokens generated per day with a 30% acceptance rate = 300M accepted tokens per day.
+
+Cost per 1K accepted tokens: ~$0.014.
+
+That's viable. If acceptance rate drops to 15%, the cost per accepted token doubles and the business case weakens.
+
+### Monitoring dashboard priorities
+
+The metrics that should be on the on-call dashboard, in order of severity:
+
+1. **p99 TTFT by request type**: if inline completions breach 100ms, developer UX is degraded.
+2. **Cancellation rate**: if > 50%, either latency is spiking or the trigger heuristics are too aggressive.
+3. **Prefix cache hit rate**: if it drops below 50%, TTFT will drift up as more requests hit full prefill.
+4. **Acceptance rate**: if it drops below 20%, the system is generating noise. Could indicate a context assembly bug, model degradation, or a shift in user traffic patterns.
+5. **GPU utilization**: low utilization means overspend. High utilization means no headroom for burst.
+
+---
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
