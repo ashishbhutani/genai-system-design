@@ -12,7 +12,8 @@ tags: ["AI Agents", "System Design", "GenAI", "Interview"]
 
 An enterprise logistics platform handles millions of shipments per day across multiple clients and regions. Customers need support across the full order lifecycle: tracking a shipment, understanding return eligibility, initiating a refund, or resolving a delivery dispute.
 
-Today this is handled through rule-based IVR flows and human support agents. Rule-based systems break on anything outside the happy path. Human agents don't scale cheaply during peak periods. The gap between the two is where most support friction lives.
+Today this is handled through rule-based IVR flows and human support agents but
+rule-based systems break quite frequently on anything outside the happy path.
 
 The system we're designing is an **AI-powered order support agent**: it handles the full range of support queries conversationally, calls into order management and logistics APIs to take action, and escalates to a human agent when the situation requires judgment beyond what can be automated.
 

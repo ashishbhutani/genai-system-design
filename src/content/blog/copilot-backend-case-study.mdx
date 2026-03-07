@@ -16,7 +16,7 @@ This is fundamentally different from a chatbot or a summarizer. There's no "load
 
 ### Who uses this system
 
-Three groups, each with different needs:
+These three groups have almost nothing in common in terms of what they care about.
 
 **The developer** sees inline suggestions in their editor. They accept, reject, or ignore them without breaking flow. The experience should feel like a fast colleague who occasionally finishes your sentences. When it works, you barely notice it's there. When it doesn't, it's the first thing you turn off.
 
@@ -26,7 +26,7 @@ Three groups, each with different needs:
 
 ### Why this is hard
 
-Three constraints fight each other:
+The system sits at the intersection of three constraints that don't play nicely together:
 
 - **Latency**: p99 under 100ms for inline completions. That's the total budget from the moment the IDE sends a request to the moment the first token arrives back. This leaves roughly 60ms for model inference after accounting for network and context assembly.
 - **Quality**: suggestions need to be syntactically valid, contextually relevant, and worth accepting. Low acceptance rates mean the system is burning GPU cycles to produce noise.
@@ -96,7 +96,7 @@ Not everything needs a model:
 
 The model is needed at exactly one point: generating the completion tokens. Everything else is orchestration, caching, filtering, and delivery.
 
-This is worth stating clearly because a common over-engineering pattern is to add models at multiple stages (a model for context ranking, a model for quality scoring, a model for safety filtering on top of the generation model). Each additional model call adds latency. In a 100ms budget, there's room for exactly one model call, and it better be fast.
+A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Each call adds latency. In a 100ms budget, there's room for one model call. It better be fast.
 
 ### Cost and value framing
 
@@ -249,8 +249,6 @@ One of the most important infrastructure components in this system. Covered in d
 | S3 / Blob | Completion telemetry logs, accepted/rejected signals | Write-heavy, async |
 | Postgres | Usage metrics, billing, per-user acceptance rates | Write-heavy, periodic aggregation |
 
-Here's how these components connect:
-
 ![Copilot-style code completion architecture: IDE Plugin to Gateway to Context Assembler, routing to Fast and Quality model pools, with Prefix KV Cache, Vector Index, and S3/Postgres as supporting stores](/diagrams/copilot-architecture.png)
 
 ### Architecture flow for an inline completion request
@@ -270,7 +268,7 @@ If the developer types during steps 2-5, a cancellation signal propagates throug
 
 ## Step 3: The Latency Problem
 
-The 100ms budget is what makes this system interesting from a design perspective. Let's break down where every millisecond goes.
+The 100ms budget is where the interesting design decisions come from. Here's where every millisecond actually goes.
 
 ### Budget allocation
 
@@ -299,7 +297,7 @@ On a cache hit, the total is roughly 35-65ms. On a cache miss, 50-85ms. Both are
 
 ## Step 4: Prefix Caching at Scale
 
-Prefix caching is the single most impactful optimization for code completion latency, and also the most complex to operate. It deserves its own section.
+Prefix caching is the single biggest latency lever in this system, and the hardest one to operate correctly.
 
 ### The insight
 
@@ -330,9 +328,9 @@ KV tensors are large. For a 7B model with 32 layers, 32 heads, 128 dimensions pe
 You can't store many of these in GPU HBM. A 80GB H100 can hold roughly 150 prefix cache entries of 1K tokens alongside the model weights. That's not a lot.
 
 The tiered approach:
-- **L1 (GPU HBM)**: hottest entries. The 50-100 most frequently accessed prefixes. Sub-millisecond load time.
-- **L2 (Host DRAM)**: warm entries. Thousands of prefixes. 1-3ms load time over PCIe.
-- **L3 (Redis cluster)**: cold entries across the fleet. 5-10ms load time over network.
+- **L1 (GPU HBM)**: the 50-100 hottest prefixes, sub-millisecond load.
+- **L2 (Host DRAM)**: thousands of warm entries, 1-3ms over PCIe.
+- **L3 (Redis cluster)**: cold entries shared across the fleet, 5-10ms over the network.
 
 ![Prefix Cache 3-Tier Storage showing L1 GPU HBM, L2 Host DRAM, and L3 Redis Cluster with eviction flows](/diagrams/copilot-prefix-cache.png)
 
@@ -367,7 +365,7 @@ def evaluate_model(model, X_test, y_test):
 
 The model generates tokens to fill the `<middle>` section. It knows the function signature (from prefix) and the return statement (from suffix), so it can generate the body that makes both ends consistent.
 
-This is not a minor detail. FIM increases acceptance rate on code completion by 15-25% compared to prefix-only generation, because the model can infer what the developer wants from the code structure on both sides.
+FIM increases acceptance rate by 15-25% compared to prefix-only generation. The model can see the return statement below the cursor and infer what the body needs to do. That signal is hard to replicate any other way.
 
 ### What goes in the prompt
 
@@ -397,25 +395,25 @@ This priority order matters because experiments consistently show that near-curs
 
 If the fast model pool hits a latency spike (GPU thermal throttling, batch size growth, cache miss storm), inline completions start timing out. The IDE plugin's cancellation logic protects the developer experience: they just don't see suggestions for a few seconds. But the GPU is still wasting cycles on requests that will be cancelled.
 
-**Mitigation**: the gateway tracks rolling p99 latency. If it exceeds 80ms (getting close to the 100ms budget), it starts rejecting new requests before they reach the model pool. The model pool drains its queue, latency recovers, and requests resume. This shed-load-early pattern is better than letting the queue build up and having every request timeout.
+**Mitigation**: the gateway tracks rolling p99 latency. If it exceeds 80ms, it starts rejecting new requests before they reach the model pool. The pool drains its queue, latency recovers, and requests resume. Shedding load early is better than letting the queue build until every request times out.
 
 ### Prefix cache miss storm
 
 When a large group of developers start a new session simultaneously (Monday morning, post-deploy restart), the prefix cache is cold. Every request pays full prefill cost. The model pool's effective throughput drops because prefill is more expensive than decode, and TTFT spikes.
 
-**Mitigation**: cache warming. When a repo becomes active (first request from that repo in a session), proactively compute and cache the common file-level prefixes in the background. This preemptive warming means the second and subsequent requests from that repo hit the cache.
+**Fix**: cache warming. When a repo sees its first request in a session, proactively compute and cache the common file-level prefixes in the background. By the time the second request arrives, the cache is warm.
 
 ### Context assembly returning poor context
 
 If the context assembler includes irrelevant files or truncates the prefix too aggressively, the model generates completions that don't match the developer's intent. Acceptance rate drops, cancellation rate rises.
 
-**Mitigation**: A/B testing on context assembly strategies. Track acceptance rate per strategy variant. The context assembly pipeline is the fastest thing to iterate on (it's deterministic code, not model weights), so it's the right place to experiment.
+Context assembly is deterministic code, not model weights, so it's the fastest thing to iterate on. A/B test strategy variants and track acceptance rate per variant. If something is generating bad context, you'll see it in the acceptance numbers before users complain.
 
 ### Speculative decoding draft divergence
 
 If the draft model's token predictions diverge significantly from what the verifier would produce, the speculation acceptance rate drops and speculative decoding becomes overhead rather than speedup (the draft model runs but its tokens get rejected, wasting time).
 
-**Mitigation**: monitor the speculation acceptance rate. If it drops below 50% for a particular language or code pattern, fall back to standard decode for those requests. The draft model's accuracy varies by language: it tends to be better on Python (uniform style) and worse on languages with complex syntax (Rust, Haskell).
+Monitor the speculation acceptance rate per language. If it drops below 50% for a particular pattern, fall back to standard decode for those requests. In practice, draft accuracy varies significantly by language: Python is predictable (uniform style, common idioms), Rust and Haskell much less so.
 
 ## Operational Concerns
 
