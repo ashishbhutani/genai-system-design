@@ -32,25 +32,7 @@ What it can't do:
 - Write boilerplate that's contextually correct but doesn't exist yet in the AST
 - Handle natural language comments that describe the code that should follow
 
-These require understanding intent from partial context, which is exactly what language models are good at.
-
-### Where deterministic logic is enough
-
-- **Request routing**: which model pool handles this request type? Deterministic rule.
-- **Context assembly**: which files to include, in what order, up to what token budget? Rules + recency heuristics.
-- **Cache lookup**: does a prefix cache entry exist for this context? Hash comparison.
-- **Response filtering**: does the completion parse in the target language? AST validation.
-- **Auth and tenant isolation**: never involves a model.
-
-### Where the model is needed
-
-The model is needed at exactly one point: generating the completion tokens and things around it is software engineering and system design.A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Given the latency busget we have, we mostly don't have luxury for too many models.
-
-### Cost and value framing
-
-The value of a code completion system is proportional to its acceptance rate. If 30% of suggestions are accepted, each accepted suggestion saves the developer 5-30 seconds of typing. At 1M active developers generating 200 suggestions per day, a 30% acceptance rate means 60M accepted suggestions per day. At even 5 seconds saved per acceptance, that's 300M seconds of developer time saved per day.
-
-The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quantized to INT8, we are looking at a fleet of 50-100 GPUs depending on batch sizes and cache hit rates. At cloud pricing, that's a significant but not unreasonable cost against the developer productivity gain.
+These require understanding intent from partial context, which is actually what language models are good at.
 
 
 ## Step 1: Requirements
@@ -58,10 +40,9 @@ The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quant
 ### Functional requirements
 
 1. **Inline code completion**: predict the next 1-5 lines based on cursor position and surrounding code.
-2. **Fill-in-the-middle (FIM)**: given code above and below the cursor, generate what goes in between. This is the primary mode for code completion, introduced by [Bavarian et al., 2022](https://arxiv.org/abs/2207.14255).
-3. **Multi-line / whole-function completion**: generate larger blocks when triggered explicitly (e.g., after a function signature or docstring).
-4. **Streaming output**: tokens arrive incrementally. The developer sees partial completions building up.
-5. **Cancellation**: if the developer types another character before the completion arrives, the request is cancelled server-side. No wasted GPU cycles on abandoned generations.
+2. **Fill-in-the-middle (FIM)**: given code above and below the cursor, generate what goes in between. This is the primary mode for code completion.
+3. **Streaming output**: tokens arrive incrementally. The developer sees partial completions building up.
+4. **Cancellation**: if the developer types another character before the completion arrives, the request is cancelled server-side. No wasted GPU cycles on abandoned generations.
 
 ### Non-functional requirements
 
@@ -98,7 +79,7 @@ The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quant
 
 ### Quality metrics
 
-**Primary metric: acceptance rate.** This is the fraction of displayed suggestions that the developer accepts. It's the single best proxy for whether the system is useful. Industry benchmarks for code completion sit around 25-35%.
+**Primary metric: acceptance rate.** This is the fraction of displayed suggestions that the developer accepts. 
 
 **Supporting metrics:**
 - **Persistence rate**: of accepted completions, how many are still in the codebase 30 minutes later? This catches "accepted but immediately edited away" cases.
