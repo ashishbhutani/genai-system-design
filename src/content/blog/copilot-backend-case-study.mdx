@@ -15,7 +15,6 @@ The system we're designing is a **code completion backend** in the style of GitH
 In this way, it's quite different from a chatbot or a summarizer as there is no waiting time here.
 
 
-
 ### What this system is not
 
 It's not a chatbot attached to a code editor as chatbots have a request-response interaction model where the user waits. Code completion has a fire-and-forget model where the system either keeps up or gets cancelled. 
@@ -37,7 +36,6 @@ These require understanding intent from partial context, which is exactly what l
 
 ### Where deterministic logic is enough
 
-
 - **Request routing**: which model pool handles this request type? Deterministic rule.
 - **Context assembly**: which files to include, in what order, up to what token budget? Rules + recency heuristics.
 - **Cache lookup**: does a prefix cache entry exist for this context? Hash comparison.
@@ -46,9 +44,7 @@ These require understanding intent from partial context, which is exactly what l
 
 ### Where the model is needed
 
-The model is needed at exactly one point: generating the completion tokens and things around it is software engineering and system design.
-
-A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Given the latency busget we have, we mostly don't have luxury for too many models.
+The model is needed at exactly one point: generating the completion tokens and things around it is software engineering and system design.A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Given the latency busget we have, we mostly don't have luxury for too many models.
 
 ### Cost and value framing
 
@@ -99,22 +95,6 @@ The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quant
 | Average suffix context | 500-1,000 tokens |
 
 
-### Inputs
-
-Every request carries:
-
-- **Cursor position**: which file, which line, which column.
-- **Prefix**: the code above the cursor, up to some token budget. This is the "what came before" that the model uses to predict what comes next.
-- **Suffix**: the code below the cursor. This way the model sees what's on both sides and fills the gap.
-- **Adjacent file context**: the most recently opened or edited files. If the developer just wrote a function signature in `utils.py` and now they're in `main.py`, the model should know about that function.
-- **Repo-level metadata**: language, framework, import patterns.
-
-### Outputs
-
-- A streamed sequence of tokens representing the suggested completion. Streaming matters because the developer should see the first few tokens before the model has finished generating the full suggestion.
-- The output must be syntactically valid in the target language.
-- Each completion also carries metadata: model latency, cache hit status, and a request ID for telemetry.
-
 
 ### Quality metrics
 
@@ -138,9 +118,9 @@ Every request carries:
 
 ## Step 2: Architecture
 
-### The first design decision: tiered serving
+### Tiered serving
 
-Not all request types deserve the same model. Inline completion needs a small, fast model. Copilot Chat can afford a larger, slower model. Trying to serve both from the same model pool means either inline is too slow (if you use the quality model) or chat is too dumb (if you use the fast model).
+Models can be changed depending on the request type. For inline completion, we need a small and fast model while copilot Chat can afford a larger and slower model. Trying to serve both from the same model pool means either inline is too slow (if yoweu use the quality model) or chat is not that great (if we use the fast model).
 
 The serving tier split:
 
@@ -149,13 +129,13 @@ The serving tier split:
 | Fast | 3-7B | INT4/INT8 | Inline completion, FIM | < 60ms TTFT |
 | Quality | 30-70B | INT8/FP8 | Whole-function, docstring, chat | < 500ms TTFT |
 
-The fast tier is where 80-90% of requests go. It's the one that needs to be hyper-optimized.
+80-90% of the requests go to the fast-tier and needs to be more optimized.
 
 ### System components
 
 **IDE Plugin**
 
-The plugin is the first line of defense against unnecessary requests. It implements:
+The plugin is the local piece of software that runs wiyhin IDE and can handle a bunch of important things:
 - **Keystroke debounce**: don't send a request on every keystroke. Wait for 75ms of idle time after the last keypress. This alone eliminates 60-70% of potential requests.
 - **Cancellation on new input**: if the developer types while a request is in flight, cancel it immediately. The IDE sends a cancellation signal; the gateway propagates it to the serving pool.
 - **Local filtering**: if the cursor is inside a comment, a string literal, or a position where autocomplete is unlikely to help, skip the request entirely.
@@ -192,10 +172,12 @@ The model generates tokens to fill the `<middle>` section.
 
 **Fast Model Serving Pool**
 
-A fleet of GPUs running the 3-7B code model. Optimized for TTFT, not throughput. Key configuration choices:
+A fleet of GPUs running the 3-7B code model which are pptimized for TTFT and not for throughput. Important choice include:
 
 - **Continuous batching** with small max batch size (4-8). Larger batches improve throughput but increase TTFT because new requests wait for the current batch to finish its decode step. At a 60ms TTFT budget, you can't afford to wait behind 32 other requests.
+
 - **Speculative decoding**: a tiny draft model (e.g. 500M parameters) proposes 4-6 tokens per step. The main model verifies them in one forward pass. For code, where patterns are repetitive (closing brackets, common idioms, boilerplate), the acceptance rate of speculative tokens is high (60-80%). This gives an effective 2-3x speedup on decode. ([Leviathan et al., 2023](https://arxiv.org/abs/2211.17192))
+
 - **KV cache reuse from prefix cache**: if the gateway found a prefix cache hit, the model starts decode immediately without running prefill. This is the single biggest latency win. Prefill on 2,000 tokens at a 7B model takes 15-25ms. Skipping it entirely reclaims that budget for decode.
 
 **Quality Model Serving Pool**
@@ -235,9 +217,9 @@ Total: ~60-70ms with cache hit, ~80-90ms without. Both within the 100ms p99 budg
 
 If the developer types during steps 2-5, a cancellation signal propagates through Gateway to the model pool. The GPU preempts the generation and the batch slot is freed for the next request.
 
-## Step 3: The Latency Problem
+## Step 3: Handling latency requirements
 
-The 100ms budget is where the interesting design decisions come from. Here's where every millisecond actually goes.
+The 100ms budget is pretty tight and we need to accouunt for that:
 
 ### Budget allocation
 
