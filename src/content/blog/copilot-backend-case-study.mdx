@@ -8,7 +8,9 @@ tags: ["System Design", "Interview"]
 
 ## Problem Statement
 
-Code autocomplete is one of the few GenAI products where the latency constraint is non-negotiable. If a suggestion arrives after the developer has already typed the next character, it's worthless. Worse, it's distracting.
+Code autocomplete is one of the few GenAI products where the latency constraint
+is non-negotiable. If a suggestion arrives after the developer has already
+typed the next character, it's no good.
 
 The system we're designing is a **code completion backend** in the style of GitHub Copilot. It runs inside the IDE, predicting what the developer will type next based on the code around their cursor. The developer never waits for it. They type, and completions appear inline if the system has something useful to offer. If it's too slow, the completion gets cancelled silently and the developer never sees it.
 
