@@ -8,68 +8,19 @@ tags: ["System Design", "Interview"]
 
 ## Problem Statement
 
-Code autocomplete is one of the few GenAI products where the latency constraint
-is non-negotiable. If a suggestion arrives after the developer has already
+Code autocomplete is a kind of GenAI products where the latency constraint is very important. If a suggestion arrives after the developer has already
 typed the next character, it's no good.
 
-The system we're designing is a **code completion backend** in the style of GitHub Copilot. It runs inside the IDE, predicting what the developer will type next based on the code around their cursor. The developer never waits for it. They type, and completions appear inline if the system has something useful to offer. If it's too slow, the completion gets cancelled silently and the developer never sees it.
+The system we're designing is a **code completion backend** in the style of GitHub Copilot. It runs inside the IDE, predicting what the developer will type next based on the code around their cursor. The developer never waits for it as they keep on typing and completions appear inline if the system has something useful to offer. If the suggestions are slow, developer has already moved to next word in their typing and the previous suggestions are no more usefil.
+In this way, it's quite different from a chatbot or a summarizer as there is no waiting time here.
 
-This is fundamentally different from a chatbot or a summarizer. There's no "loading" spinner. There's no "please wait." The model either keeps up with the developer's keystroke rhythm, or it gets thrown away.
 
-### Who uses this system
-
-These three groups have almost nothing in common in terms of what they care about.
-
-**The developer** sees inline suggestions in their editor. They accept, reject, or ignore them without breaking flow. The experience should feel like a fast colleague who occasionally finishes your sentences. When it works, you barely notice it's there. When it doesn't, it's the first thing you turn off.
-
-**The platform engineering team** runs the backend. They care about GPU utilization (cost), request throughput, p99 latency, cache hit rates, and the operational health of a system that fields millions of requests per hour with significant burst patterns (9am Monday looks nothing like 2am Sunday).
-
-**The enterprise customer** cares about data isolation, code privacy, and compliance. Their proprietary code is being sent to a model. They need guarantees about where that data goes, how long it's retained, and whether it's ever used for training.
-
-### Why this is hard
-
-The system sits at the intersection of three constraints that don't play nicely together:
-
-- **Latency**: p99 under 100ms for inline completions. That's the total budget from the moment the IDE sends a request to the moment the first token arrives back. This leaves roughly 60ms for model inference after accounting for network and context assembly.
-- **Quality**: suggestions need to be syntactically valid, contextually relevant, and worth accepting. Low acceptance rates mean the system is burning GPU cycles to produce noise.
-- **Cost**: at 1B tokens per day, model serving cost is a significant line item. Every optimization that reduces per-token cost (quantization, caching, smaller models) also risks degrading quality or adding operational complexity.
-
-Most serving systems optimize for one of these. A batch summarizer optimizes for throughput. A chatbot optimizes for quality with a generous latency budget. Code completion has to solve all three simultaneously, under the hardest latency constraint of the three.
-
-## Framing the System
-
-### Inputs
-
-Every request carries:
-
-- **Cursor position**: which file, which line, which column.
-- **Prefix**: the code above the cursor, up to some token budget. This is the "what came before" that the model uses to predict what comes next.
-- **Suffix**: the code below the cursor. This is what separates modern code completion from older left-to-right text generation. The model sees what's on both sides and fills the gap.
-- **Adjacent file context**: the most recently opened or edited files. If the developer just wrote a function signature in `utils.py` and now they're in `main.py`, the model should know about that function.
-- **Repo-level metadata**: language, framework, import patterns.
-
-### Outputs
-
-- A streamed sequence of tokens representing the suggested completion. Streaming matters because the developer should see the first few tokens before the model has finished generating the full suggestion.
-- The output must be syntactically valid (or at least not obviously broken) in the target language.
-- Each completion also carries metadata: model latency, cache hit status, and a request ID for telemetry.
-
-### Constraints
-
-| Property | Target |
-|---|---|
-| Inline completion TTFT (time to first token), p99 | < 100ms |
-| Fill-in-the-middle TTFT, p99 | < 150ms |
-| Whole-function / docstring TTFT, p99 | < 500ms |
-| Copilot Chat TTFT, p99 | < 2s |
-
-The first row is the one that defines the architecture. Everything else is comparatively relaxed.
 
 ### What this system is not
 
-It's not a chatbot attached to a code editor. Chatbots have a request-response interaction model where the user waits. Code completion has a fire-and-forget model where the system either keeps up or gets cancelled. This distinction drives almost every architectural choice.
+It's not a chatbot attached to a code editor as chatbots have a request-response interaction model where the user waits. Code completion has a fire-and-forget model where the system either keeps up or gets cancelled. 
 
-It's also not a code search engine. The model is not retrieving existing code from the repo. It's generating new code conditioned on the surrounding context. Retrieval is part of the context assembly pipeline, but the output is generative.
+It's also not a code search engine. The model is not retrieving existing code from the repo and rather it's generating new code conditioned on the surrounding context. Retrieval is part of the overall process but the output is generative.
 
 ## Step 0: Why GenAI?
 
@@ -86,7 +37,6 @@ These require understanding intent from partial context, which is exactly what l
 
 ### Where deterministic logic is enough
 
-Not everything needs a model:
 
 - **Request routing**: which model pool handles this request type? Deterministic rule.
 - **Context assembly**: which files to include, in what order, up to what token budget? Rules + recency heuristics.
@@ -96,17 +46,16 @@ Not everything needs a model:
 
 ### Where the model is needed
 
-The model is needed at exactly one point: generating the completion tokens. Everything else is orchestration, caching, filtering, and delivery.
+The model is needed at exactly one point: generating the completion tokens and things around it is software engineering and system design.
 
-A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Each call adds latency. In a 100ms budget, there's room for one model call. It better be fast.
+A common over-engineering mistake is adding models at multiple stages: a model for context ranking, another for quality scoring, another for safety filtering on top of generation. Given the latency busget we have, we mostly don't have luxury for too many models.
 
 ### Cost and value framing
 
-The value of a code completion system is proportional to its acceptance rate. If 30% of suggestions are accepted, each accepted suggestion saves the developer 5-30 seconds of typing. At 1M active developers generating 200 suggestions per day, a 30% acceptance rate means 60M accepted suggestions per day. At even 5 seconds saved per acceptance, that's 300M seconds of developer time saved per day, or roughly 3,500 developer-years per year.
+The value of a code completion system is proportional to its acceptance rate. If 30% of suggestions are accepted, each accepted suggestion saves the developer 5-30 seconds of typing. At 1M active developers generating 200 suggestions per day, a 30% acceptance rate means 60M accepted suggestions per day. At even 5 seconds saved per acceptance, that's 300M seconds of developer time saved per day.
 
-The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quantized to INT8, you're looking at a fleet of 50-100 GPUs depending on batch sizes and cache hit rates. At cloud pricing, that's a significant but not unreasonable cost against the developer productivity gain.
+The cost side: serving a 7B parameter model at 1B tokens per day on H100s. Quantized to INT8, we are looking at a fleet of 50-100 GPUs depending on batch sizes and cache hit rates. At cloud pricing, that's a significant but not unreasonable cost against the developer productivity gain.
 
-The math works if the acceptance rate stays above roughly 25%. Below that, the system is burning GPU to produce noise.
 
 ## Step 1: Requirements
 
@@ -148,6 +97,24 @@ The math works if the acceptance rate stays above roughly 25%. Below that, the s
 | Average completion length | 30-80 tokens |
 | Average prefix context | 1,500-2,000 tokens |
 | Average suffix context | 500-1,000 tokens |
+
+
+### Inputs
+
+Every request carries:
+
+- **Cursor position**: which file, which line, which column.
+- **Prefix**: the code above the cursor, up to some token budget. This is the "what came before" that the model uses to predict what comes next.
+- **Suffix**: the code below the cursor. This way the model sees what's on both sides and fills the gap.
+- **Adjacent file context**: the most recently opened or edited files. If the developer just wrote a function signature in `utils.py` and now they're in `main.py`, the model should know about that function.
+- **Repo-level metadata**: language, framework, import patterns.
+
+### Outputs
+
+- A streamed sequence of tokens representing the suggested completion. Streaming matters because the developer should see the first few tokens before the model has finished generating the full suggestion.
+- The output must be syntactically valid in the target language.
+- Each completion also carries metadata: model latency, cache hit status, and a request ID for telemetry.
+
 
 ### Quality metrics
 
