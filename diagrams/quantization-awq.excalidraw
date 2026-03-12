@@ -1,0 +1,234 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "mcp-excalidraw-server",
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 150,
+      "y": 10,
+      "strokeColor": "#e9ecef",
+      "text": "AWQ: Activation-aware Weight Quantization",
+      "fontSize": 22,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.520Z",
+      "updatedAt": "2026-03-12T10:36:01.520Z",
+      "version": 1
+    },
+    {
+      "id": "subtitle",
+      "type": "text",
+      "x": 165,
+      "y": 40,
+      "strokeColor": "#adb5bd",
+      "text": "Protecting the 1% of salient weights from quantization error",
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.520Z",
+      "updatedAt": "2026-03-12T10:36:01.520Z",
+      "version": 1
+    },
+    {
+      "id": "fp16_box",
+      "type": "rectangle",
+      "x": 20,
+      "y": 100,
+      "width": 220,
+      "height": 180,
+      "backgroundColor": "#1a3a4a",
+      "strokeColor": "#22b8cf",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:36:01.520Z",
+      "updatedAt": "2026-03-12T10:36:01.520Z",
+      "version": 1
+    },
+    {
+      "id": "fp16_title",
+      "type": "text",
+      "x": 45,
+      "y": 110,
+      "strokeColor": "#e9ecef",
+      "text": "Original DB (FP16)",
+      "fontSize": 18,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "fp16_data",
+      "type": "text",
+      "x": 40,
+      "y": 160,
+      "strokeColor": "#99e9f2",
+      "text": " 0.03   0.01   0.09\n 0.02   15.2   0.04\n 0.05   0.02   0.01",
+      "fontSize": 16,
+      "fontFamily": 3,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "fp16_note",
+      "type": "text",
+      "x": 35,
+      "y": 230,
+      "strokeColor": "#fcc419",
+      "text": "Salient Weight: 15.2\n(Determined by activations)",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "std_quant_box",
+      "type": "rectangle",
+      "x": 420,
+      "y": 70,
+      "width": 320,
+      "height": 120,
+      "backgroundColor": "#5c2020",
+      "strokeColor": "#f87171",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "std_title",
+      "type": "text",
+      "x": 460,
+      "y": 80,
+      "strokeColor": "#e9ecef",
+      "text": "Standard Quantization (INT4)",
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "std_desc",
+      "type": "text",
+      "x": 440,
+      "y": 115,
+      "strokeColor": "#fca5a5",
+      "text": "Large outlier dictates scale factor.\nNormal weights 0.01 - 0.09 get\ncrushed into the same '0' bucket.\nHigh error.",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "awq_box",
+      "type": "rectangle",
+      "x": 420,
+      "y": 220,
+      "width": 320,
+      "height": 120,
+      "backgroundColor": "#2b5e2b",
+      "strokeColor": "#40c057",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "awq_title",
+      "type": "text",
+      "x": 520,
+      "y": 230,
+      "strokeColor": "#e9ecef",
+      "text": "AWQ (INT4)",
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "awq_desc",
+      "type": "text",
+      "x": 440,
+      "y": 265,
+      "strokeColor": "#8ce99a",
+      "text": "Mathematically scales up the 1%\nsalient weights before quantizing.\nProtects their precision.\nLower error vs GPTQ.",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1
+    },
+    {
+      "id": "arr1",
+      "type": "arrow",
+      "x": 247.92982320546108,
+      "y": 174.2760235726052,
+      "width": 180,
+      "strokeColor": "#f87171",
+      "strokeWidth": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          164.14035358907782,
+          -21.885380478543738
+        ]
+      ],
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "fp16_box",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "std_quant_box",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "arr2",
+      "type": "arrow",
+      "x": 247.84464540552736,
+      "y": 213.56892908110547,
+      "width": 180,
+      "strokeColor": "#40c057",
+      "strokeWidth": 2,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          164.31070918894525,
+          32.862141837789096
+        ]
+      ],
+      "createdAt": "2026-03-12T10:36:01.521Z",
+      "updatedAt": "2026-03-12T10:36:01.521Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "fp16_box",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "awq_box",
+        "focus": 0,
+        "gap": 8
+      }
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": null
+  }
+}

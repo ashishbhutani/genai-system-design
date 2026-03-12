@@ -1,0 +1,203 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "mcp-excalidraw-server",
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 150,
+      "y": 10,
+      "strokeColor": "#e9ecef",
+      "text": "Decode Phase: The Memory Bandwidth Bottleneck",
+      "fontSize": 22,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.467Z",
+      "updatedAt": "2026-03-12T10:25:05.468Z",
+      "version": 1
+    },
+    {
+      "id": "hbm",
+      "type": "rectangle",
+      "x": 30,
+      "y": 80,
+      "width": 200,
+      "height": 120,
+      "backgroundColor": "#3b2f6b",
+      "strokeColor": "#a78bfa",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:25:05.468Z",
+      "updatedAt": "2026-03-12T10:25:05.468Z",
+      "version": 1
+    },
+    {
+      "id": "hbm_title",
+      "type": "text",
+      "x": 55,
+      "y": 90,
+      "strokeColor": "#e9ecef",
+      "text": "HBM (GPU RAM)",
+      "fontSize": 18,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.469Z",
+      "updatedAt": "2026-03-12T10:25:05.469Z",
+      "version": 1
+    },
+    {
+      "id": "hbm_subtitle",
+      "type": "text",
+      "x": 45,
+      "y": 120,
+      "strokeColor": "#c4b5fd",
+      "text": "Stores Model Weights\n- FP16 70B: 140 GB\n- INT4 70B: 35 GB",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.469Z",
+      "updatedAt": "2026-03-12T10:25:05.469Z",
+      "version": 1
+    },
+    {
+      "id": "compute",
+      "type": "rectangle",
+      "x": 550,
+      "y": 80,
+      "width": 200,
+      "height": 120,
+      "backgroundColor": "#5c2020",
+      "strokeColor": "#f87171",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:25:05.469Z",
+      "updatedAt": "2026-03-12T10:25:05.469Z",
+      "version": 1
+    },
+    {
+      "id": "compute_title",
+      "type": "text",
+      "x": 560,
+      "y": 90,
+      "strokeColor": "#e9ecef",
+      "text": "SRAM & Tensor Cores",
+      "fontSize": 18,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.469Z",
+      "updatedAt": "2026-03-12T10:25:05.469Z",
+      "version": 1
+    },
+    {
+      "id": "compute_subtitle",
+      "type": "text",
+      "x": 565,
+      "y": 120,
+      "strokeColor": "#fca5a5",
+      "text": "Executes Math\n- Waits for weights\n- Almost instant TFLOPS",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.469Z",
+      "updatedAt": "2026-03-12T10:25:05.469Z",
+      "version": 1
+    },
+    {
+      "id": "bus",
+      "type": "arrow",
+      "x": 238,
+      "y": 140,
+      "width": 320,
+      "height": 0,
+      "strokeColor": "#fab005",
+      "strokeWidth": 4,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          304,
+          0
+        ]
+      ],
+      "createdAt": "2026-03-12T10:25:05.470Z",
+      "updatedAt": "2026-03-12T10:25:05.470Z",
+      "version": 1,
+      "startBinding": {
+        "elementId": "hbm",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "compute",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "bus_box",
+      "type": "rectangle",
+      "x": 290,
+      "y": 120,
+      "width": 160,
+      "height": 40,
+      "backgroundColor": "#614a1a",
+      "strokeColor": "#fab005",
+      "strokeWidth": 2,
+      "createdAt": "2026-03-12T10:25:05.470Z",
+      "updatedAt": "2026-03-12T10:25:05.470Z",
+      "version": 1
+    },
+    {
+      "id": "bus_label",
+      "type": "text",
+      "x": 320,
+      "y": 130,
+      "strokeColor": "#ffd43b",
+      "text": "Memory Bus",
+      "fontSize": 16,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.471Z",
+      "updatedAt": "2026-03-12T10:25:05.471Z",
+      "version": 1
+    },
+    {
+      "id": "fp16_text",
+      "type": "text",
+      "x": 290,
+      "y": 180,
+      "strokeColor": "#868e96",
+      "text": "FP16: Moves 140GB per token\nSlowest part of decode",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.471Z",
+      "updatedAt": "2026-03-12T10:25:05.471Z",
+      "version": 1
+    },
+    {
+      "id": "int4_text",
+      "type": "text",
+      "x": 290,
+      "y": 230,
+      "strokeColor": "#40c057",
+      "text": "INT4: Moves 35GB per token\n4x less wait time",
+      "fontSize": 14,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.471Z",
+      "updatedAt": "2026-03-12T10:25:05.471Z",
+      "version": 1
+    },
+    {
+      "id": "note",
+      "type": "text",
+      "x": 180,
+      "y": 300,
+      "strokeColor": "#adb5bd",
+      "text": "Quantization compresses the weights before they go over the bus.",
+      "fontSize": 13,
+      "fontFamily": 2,
+      "createdAt": "2026-03-12T10:25:05.472Z",
+      "updatedAt": "2026-03-12T10:25:05.472Z",
+      "version": 1
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": null
+  }
+}
