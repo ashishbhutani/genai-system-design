@@ -1,0 +1,10 @@
+{
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "genaisystemdesign.com" }],
+      "destination": "https://www.genaisystemdesign.com/:path*",
+      "permanent": true
+    }
+  ]
+}
