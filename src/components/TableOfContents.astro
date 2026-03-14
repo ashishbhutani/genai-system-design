@@ -1,0 +1,124 @@
+---
+interface Heading {
+	depth: number;
+	slug: string;
+	text: string;
+}
+
+interface Props {
+	headings: Heading[];
+	mobile?: boolean;
+}
+
+const { headings, mobile = false } = Astro.props;
+const tocHeadings = headings.filter((h) => h.depth === 2);
+---
+
+{tocHeadings.length > 0 && !mobile && (
+	<nav class="toc-sidebar" aria-label="Table of contents">
+		<div class="toc-title">On this page</div>
+		<ul>
+			{tocHeadings.map((heading) => (
+				<li>
+					<a href={`#${heading.slug}`} class="toc-link">{heading.text}</a>
+				</li>
+			))}
+		</ul>
+	</nav>
+)}
+
+{tocHeadings.length > 0 && mobile && (
+	<details class="toc-mobile">
+		<summary>Table of contents</summary>
+		<ul>
+			{tocHeadings.map((heading) => (
+				<li>
+					<a href={`#${heading.slug}`} class="toc-link">{heading.text}</a>
+				</li>
+			))}
+		</ul>
+	</details>
+)}
+
+<style>
+	/* Desktop sidebar */
+	.toc-sidebar {
+		position: sticky;
+		top: 5rem;
+		max-height: calc(100vh - 6rem);
+		overflow-y: auto;
+		padding-left: 1em;
+		border-left: 1px solid var(--border-color);
+	}
+
+	.toc-title {
+		font-size: 0.8em;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--text-secondary);
+		margin-bottom: 0.75em;
+	}
+
+	.toc-sidebar ul {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	.toc-sidebar li {
+		margin-bottom: 0.3em;
+	}
+
+	.toc-link {
+		font-size: 0.8em;
+		color: var(--text-secondary);
+		text-decoration: none;
+		line-height: 1.4;
+		display: block;
+		padding: 0.15em 0;
+		transition: color 0.15s ease;
+	}
+
+	.toc-link:hover,
+	.toc-link.active {
+		color: var(--accent);
+	}
+
+	/* Mobile disclosure */
+	.toc-mobile {
+		margin-bottom: 1.5em;
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		padding: 0.75em 1em;
+	}
+
+	.toc-mobile summary {
+		font-weight: 700;
+		font-size: 0.9em;
+		cursor: pointer;
+		color: var(--text-heading);
+	}
+
+	.toc-mobile ul {
+		list-style: none;
+		padding: 0;
+		margin: 0.5em 0 0 0;
+	}
+
+	.toc-mobile li {
+		margin-bottom: 0.3em;
+	}
+
+	.toc-mobile .toc-link {
+		font-size: 0.85em;
+		color: var(--text-secondary);
+		text-decoration: none;
+		padding: 0.2em 0;
+		display: block;
+	}
+
+	.toc-mobile .toc-link:hover {
+		color: var(--accent);
+	}
+</style>

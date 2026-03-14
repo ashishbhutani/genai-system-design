@@ -17,7 +17,7 @@ const posts = (await getCollection('blog')).sort(
 		<BaseHead title={`Blog — ${SITE_TITLE}`} description={SITE_DESCRIPTION} />
 		<style>
 			main {
-				width: 720px;
+				width: 800px;
 			}
 
 			.page-header {
@@ -28,7 +28,7 @@ const posts = (await getCollection('blog')).sort(
 				margin-bottom: 0.25em;
 			}
 			.page-header p {
-				color: rgb(var(--gray));
+				color: var(--text-secondary);
 				font-size: 1em;
 				margin: 0;
 			}
@@ -47,11 +47,11 @@ const posts = (await getCollection('blog')).sort(
 				border-radius: 8px;
 				text-decoration: none;
 				color: inherit;
-				border: 1px solid rgb(var(--gray-light));
+				border: 1px solid var(--border-color);
 				transition: box-shadow 0.2s ease, border-color 0.2s ease;
 			}
 			ul li a:hover {
-				box-shadow: var(--box-shadow);
+				box-shadow: var(--shadow-md);
 				border-color: var(--accent);
 			}
 			.post-meta {
@@ -60,7 +60,7 @@ const posts = (await getCollection('blog')).sort(
 				gap: 0.75em;
 				margin-bottom: 0.5em;
 				font-size: 0.85em;
-				color: rgb(var(--gray));
+				color: var(--text-secondary);
 			}
 			.tags {
 				display: flex;
@@ -68,8 +68,8 @@ const posts = (await getCollection('blog')).sort(
 				flex-wrap: wrap;
 			}
 			.tag {
-				background: rgba(var(--gray-light), 0.7);
-				color: rgb(var(--gray-dark));
+				background: var(--bg-secondary);
+				color: var(--text-primary);
 				padding: 0.15em 0.5em;
 				border-radius: 4px;
 				font-size: 0.8em;
@@ -77,11 +77,11 @@ const posts = (await getCollection('blog')).sort(
 			h3.title {
 				margin: 0 0 0.3em 0;
 				font-size: 1.25em;
-				color: rgb(var(--black));
+				color: var(--text-heading);
 			}
 			.description {
 				margin: 0;
-				color: rgb(var(--gray));
+				color: var(--text-secondary);
 				font-size: 0.9em;
 				line-height: 1.5;
 				display: -webkit-box;

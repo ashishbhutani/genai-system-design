@@ -23,6 +23,15 @@ const { title, description, image = FallbackImage, article } = Astro.props;
 const isArticle = !!article;
 ---
 
+<!-- Theme init (before paint to prevent FOUC) -->
+<script is:inline>
+(function() {
+	const saved = localStorage.getItem('theme');
+	const preferred = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+	document.documentElement.setAttribute('data-theme', saved || preferred);
+})();
+</script>
+
 <!-- Global Metadata -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />

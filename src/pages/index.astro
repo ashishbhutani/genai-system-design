@@ -67,7 +67,7 @@ const recentPosts = posts.slice(0, 5);
 	.hero {
 		text-align: center;
 		padding: 3em 1em 2em 1em;
-		max-width: 720px;
+		max-width: 800px;
 		margin: 0 auto;
 	}
 	.hero h1 {
@@ -76,7 +76,7 @@ const recentPosts = posts.slice(0, 5);
 		letter-spacing: -0.02em;
 	}
 	.subtitle {
-		color: rgb(var(--gray));
+		color: var(--text-secondary);
 		font-size: 1.1em;
 		line-height: 1.6;
 		max-width: 600px;
@@ -84,19 +84,19 @@ const recentPosts = posts.slice(0, 5);
 	}
 
 	.intro {
-		max-width: 720px;
+		max-width: 800px;
 		margin: 0 auto;
 		padding: 0 1em 1.5em 1em;
 	}
 	.intro p {
-		color: rgb(var(--gray));
+		color: var(--text-secondary);
 		font-size: 0.95em;
 		line-height: 1.7;
 		text-align: center;
 	}
 
 	.recent-posts {
-		max-width: 720px;
+		max-width: 800px;
 		margin: 0 auto;
 		padding: 1em;
 	}
@@ -104,7 +104,7 @@ const recentPosts = posts.slice(0, 5);
 		font-size: 1.5em;
 		margin-bottom: 1em;
 		padding-bottom: 0.5em;
-		border-bottom: 2px solid rgb(var(--gray-light));
+		border-bottom: 2px solid var(--border-color);
 	}
 	.recent-posts ul {
 		list-style: none;
@@ -120,11 +120,11 @@ const recentPosts = posts.slice(0, 5);
 		border-radius: 8px;
 		text-decoration: none;
 		color: inherit;
-		border: 1px solid rgb(var(--gray-light));
+		border: 1px solid var(--border-color);
 		transition: box-shadow 0.2s ease, border-color 0.2s ease;
 	}
 	.recent-posts li a:hover {
-		box-shadow: var(--box-shadow);
+		box-shadow: var(--shadow-md);
 		border-color: var(--accent);
 	}
 	.post-meta {
@@ -133,7 +133,7 @@ const recentPosts = posts.slice(0, 5);
 		gap: 0.75em;
 		margin-bottom: 0.5em;
 		font-size: 0.85em;
-		color: rgb(var(--gray));
+		color: var(--text-secondary);
 	}
 	.tags {
 		display: flex;
@@ -141,8 +141,8 @@ const recentPosts = posts.slice(0, 5);
 		flex-wrap: wrap;
 	}
 	.tag {
-		background: rgba(var(--gray-light), 0.7);
-		color: rgb(var(--gray-dark));
+		background: var(--bg-secondary);
+		color: var(--text-primary);
 		padding: 0.15em 0.5em;
 		border-radius: 4px;
 		font-size: 0.8em;
@@ -150,11 +150,11 @@ const recentPosts = posts.slice(0, 5);
 	.recent-posts h3 {
 		margin: 0 0 0.3em 0;
 		font-size: 1.25em;
-		color: rgb(var(--black));
+		color: var(--text-heading);
 	}
 	.description {
 		margin: 0;
-		color: rgb(var(--gray));
+		color: var(--text-secondary);
 		font-size: 0.9em;
 		line-height: 1.5;
 		display: -webkit-box;
@@ -171,7 +171,7 @@ const recentPosts = posts.slice(0, 5);
 	}
 
 	.cta-section {
-		max-width: 720px;
+		max-width: 800px;
 		margin: 2em auto;
 		padding: 1em;
 	}
@@ -179,15 +179,15 @@ const recentPosts = posts.slice(0, 5);
 		text-align: center;
 		padding: 2em;
 		border-radius: 12px;
-		background: linear-gradient(135deg, rgba(var(--gray-light), 0.5), rgba(var(--gray-light), 0.2));
-		border: 1px solid rgb(var(--gray-light));
+		background: var(--bg-secondary);
+		border: 1px solid var(--border-color);
 	}
 	.cta-box h2 {
 		font-size: 1.3em;
 		margin-bottom: 0.5em;
 	}
 	.cta-box p {
-		color: rgb(var(--gray));
+		color: var(--text-secondary);
 		margin-bottom: 1.5em;
 	}
 	.cta-links {

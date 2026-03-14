@@ -5,10 +5,19 @@ import BaseHead from '../components/BaseHead.astro';
 import Footer from '../components/Footer.astro';
 import FormattedDate from '../components/FormattedDate.astro';
 import Header from '../components/Header.astro';
+import TableOfContents from '../components/TableOfContents.astro';
 
-type Props = CollectionEntry<'blog'>['data'];
+interface Heading {
+	depth: number;
+	slug: string;
+	text: string;
+}
 
-const { title, description, pubDate, updatedDate, heroImage, author, tags } = Astro.props;
+type Props = CollectionEntry<'blog'>['data'] & {
+	headings?: Heading[];
+};
+
+const { title, description, pubDate, updatedDate, heroImage, author, tags, headings = [] } = Astro.props;
 
 // Estimate reading time (rough: 200 words/min)
 const slotContent = await Astro.slots.render('default');
@@ -30,25 +39,59 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 		/>
 		<style>
 			main {
-				width: calc(100% - 2em);
+				width: 100%;
 				max-width: 100%;
 				margin: 0;
+				padding: 0;
+			}
+			.post-grid {
+				display: grid;
+				grid-template-columns: min(800px, calc(100% - 2em));
+				justify-content: center;
+				gap: 0;
+				padding: 1em;
+			}
+			@media (min-width: 1100px) {
+				.post-grid {
+					grid-template-columns: 220px min(800px, calc(100% - 280px)) 1fr;
+					justify-content: start;
+					gap: 0 2em;
+					padding: 1em 2em;
+					max-width: 1300px;
+					margin: 0 auto;
+				}
 			}
 			.hero-image {
+				grid-column: 1 / -1;
 				width: 100%;
 			}
 			.hero-image img {
 				display: block;
 				margin: 0 auto;
 				border-radius: 12px;
-				box-shadow: var(--box-shadow);
+				box-shadow: var(--shadow-lg);
 			}
 			.prose {
-				width: 720px;
-				max-width: calc(100% - 2em);
-				margin: auto;
-				padding: 1em;
-				color: rgb(var(--gray-dark));
+				grid-column: 1;
+				max-width: 100%;
+				padding: 1em 0;
+				color: var(--text-primary);
+				min-width: 0;
+			}
+			@media (min-width: 1100px) {
+				.prose {
+					grid-column: 2;
+				}
+			}
+			.toc-column {
+				display: none;
+			}
+			@media (min-width: 1100px) {
+				.toc-column {
+					display: block;
+					grid-column: 1;
+					grid-row: 2;
+				}
 			}
 			.title {
 				margin-bottom: 1.5em;
@@ -66,15 +109,15 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 				justify-content: center;
 				gap: 1em;
 				margin-bottom: 0.75em;
-				color: rgb(var(--gray));
+				color: var(--text-secondary);
 				font-size: 0.9em;
 			}
 			.meta-divider {
-				color: rgb(var(--gray-light));
+				color: var(--border-color);
 			}
 			.author {
 				font-weight: 600;
-				color: rgb(var(--gray-dark));
+				color: var(--text-primary);
 			}
 			.tags-list {
 				display: flex;
@@ -84,8 +127,8 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 				margin-top: 0.75em;
 			}
 			.tag {
-				background: rgba(var(--gray-light), 0.7);
-				color: rgb(var(--gray-dark));
+				background: var(--bg-secondary);
+				color: var(--text-primary);
 				padding: 0.2em 0.6em;
 				border-radius: 4px;
 				font-size: 0.8em;
@@ -95,11 +138,19 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 				font-style: italic;
 				font-size: 0.85em;
 			}
+			.toc-mobile-wrapper {
+				display: block;
+			}
+			@media (min-width: 1100px) {
+				.toc-mobile-wrapper {
+					display: none;
+				}
+			}
 			.back-link {
 				display: inline-block;
 				margin-top: 3em;
 				padding-top: 1.5em;
-				border-top: 1px solid rgb(var(--gray-light));
+				border-top: 1px solid var(--border-color);
 				font-weight: 600;
 			}
 		</style>
@@ -109,66 +160,179 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 		<Header />
 		<main>
 			<article>
-				<div class="hero-image">
-					{heroImage && <Image width={1020} height={510} src={heroImage} alt="" />}
-				</div>
-				<div class="prose">
-					<div class="title">
-						<div class="meta">
-							<span class="author">{author || 'Ashish Bhutani'}</span>
-							<span class="meta-divider">·</span>
-							<FormattedDate date={pubDate} />
-							<span class="meta-divider">·</span>
-							<span>{readingTime} min read</span>
-						</div>
-						{
-							updatedDate && (
-								<div class="last-updated-on">
-									Last updated on <FormattedDate date={updatedDate} />
-								</div>
-							)
-						}
-						<h1>{title}</h1>
-						{tags && tags.length > 0 && (
-							<div class="tags-list">
-								{tags.map((tag) => (
-									<span class="tag">{tag}</span>
-								))}
-							</div>
-						)}
+				<div class="post-grid">
+					<div class="hero-image" style="grid-column: 1 / -1;">
+						{heroImage && <Image width={1020} height={510} src={heroImage} alt="" />}
 					</div>
-					<slot />
-					<a href="/blog" class="back-link">← Back to all posts</a>
+					<div class="prose">
+						<div class="title">
+							<div class="meta">
+								<span class="author">{author || 'Ashish Bhutani'}</span>
+								<span class="meta-divider">&middot;</span>
+								<FormattedDate date={pubDate} />
+								<span class="meta-divider">&middot;</span>
+								<span>{readingTime} min read</span>
+							</div>
+							{
+								updatedDate && (
+									<div class="last-updated-on">
+										Last updated on <FormattedDate date={updatedDate} />
+									</div>
+								)
+							}
+							<h1>{title}</h1>
+							{tags && tags.length > 0 && (
+								<div class="tags-list">
+									{tags.map((tag) => (
+										<span class="tag">{tag}</span>
+									))}
+								</div>
+							)}
+						</div>
+						<div class="toc-mobile-wrapper">
+							<TableOfContents headings={headings} mobile={true} />
+						</div>
+						<slot />
+						<a href="/blog" class="back-link">&larr; Back to all posts</a>
+					</div>
+					<div class="toc-column">
+						<TableOfContents headings={headings} />
+					</div>
 				</div>
 			</article>
 		</main>
 		<Footer />
+
+		<!-- Mermaid -->
 		<script type="module">
 			import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-			
-			// Initialize but do not auto-run yet
-			mermaid.initialize({ startOnLoad: false, theme: 'dark' });
 
-			// Astro renders markdown code blocks as <pre class="astro-code" data-language="mermaid">
-			// We need to convert these into standard <div class="mermaid"> containers before running mermaid
+			mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+
 			document.querySelectorAll('pre').forEach(pre => {
 				const code = pre.querySelector('code');
-				const isMermaid = pre.dataset.language === 'mermaid' || 
-								  (code && code.className.includes('language-mermaid')) || 
+				const isMermaid = pre.dataset.language === 'mermaid' ||
+								  (code && code.className.includes('language-mermaid')) ||
 								  pre.className.includes('mermaid');
-				
+
 				if(isMermaid) {
 					const mermaidDiv = document.createElement('div');
 					mermaidDiv.className = 'mermaid';
-					// Extract raw text content, keeping newlines intact
 					mermaidDiv.textContent = code ? code.textContent : pre.textContent;
-					// Replace the code block entirely
 					pre.replaceWith(mermaidDiv);
 				}
 			});
 
-			// Now manually trigger the render
 			await mermaid.run();
+		</script>
+
+		<!-- Table wrappers -->
+		<script>
+			document.querySelectorAll('.prose table').forEach(table => {
+				if (table.parentElement?.classList.contains('table-wrapper')) return;
+				const wrapper = document.createElement('div');
+				wrapper.className = 'table-wrapper';
+				table.parentNode?.insertBefore(wrapper, table);
+				wrapper.appendChild(table);
+			});
+		</script>
+
+		<!-- Code copy buttons -->
+		<script>
+			document.querySelectorAll('.prose pre').forEach(pre => {
+				if (pre.dataset.language === 'mermaid') return;
+				if (pre.querySelector('.code-copy-btn')) return;
+				const btn = document.createElement('button');
+				btn.className = 'code-copy-btn';
+				btn.textContent = 'Copy';
+				btn.addEventListener('click', async () => {
+					const code = pre.querySelector('code');
+					const text = code ? code.textContent || '' : pre.textContent || '';
+					await navigator.clipboard.writeText(text);
+					btn.textContent = 'Copied!';
+					setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+				});
+				pre.style.position = 'relative';
+				pre.appendChild(btn);
+			});
+		</script>
+
+		<!-- TOC active section highlight -->
+		<script>
+			const tocLinks = document.querySelectorAll('.toc-link');
+			if (tocLinks.length > 0) {
+				const headingEls = Array.from(tocLinks).map(link => {
+					const id = link.getAttribute('href')?.slice(1);
+					return id ? document.getElementById(id) : null;
+				}).filter(Boolean) as HTMLElement[];
+
+				const observer = new IntersectionObserver((entries) => {
+					entries.forEach(entry => {
+						if (entry.isIntersecting) {
+							tocLinks.forEach(l => l.classList.remove('active'));
+							document.querySelectorAll(`.toc-link[href="#${entry.target.id}"]`).forEach(l => l.classList.add('active'));
+						}
+					});
+				}, { rootMargin: '-80px 0px -70% 0px' });
+
+				headingEls.forEach(el => observer.observe(el));
+			}
+		</script>
+
+		<!-- Image lightbox + captions -->
+		<script>
+			document.querySelectorAll('.prose img:not(.no-lightbox)').forEach(img => {
+				const imgEl = img as HTMLImageElement;
+				// Add caption from alt text
+				const alt = imgEl.getAttribute('alt');
+				if (alt && alt.trim() && !imgEl.parentElement?.classList.contains('prose-img-wrapper')) {
+					const wrapper = document.createElement('figure');
+					wrapper.className = 'prose-img-wrapper';
+					imgEl.parentNode?.insertBefore(wrapper, imgEl);
+					wrapper.appendChild(imgEl);
+					const caption = document.createElement('figcaption');
+					caption.className = 'prose-img-caption';
+					caption.textContent = alt;
+					wrapper.appendChild(caption);
+				}
+
+				imgEl.addEventListener('click', () => {
+					const overlay = document.createElement('div');
+					overlay.className = 'lightbox-overlay';
+					const clone = document.createElement('img');
+					clone.src = imgEl.src;
+					clone.alt = imgEl.alt;
+					overlay.appendChild(clone);
+
+					if (alt && alt.trim()) {
+						const cap = document.createElement('div');
+						cap.className = 'lightbox-caption';
+						cap.textContent = alt;
+						overlay.appendChild(cap);
+					}
+
+					overlay.addEventListener('click', () => overlay.remove());
+					document.addEventListener('keydown', function handler(e) {
+						if (e.key === 'Escape') {
+							overlay.remove();
+							document.removeEventListener('keydown', handler);
+						}
+					});
+					document.body.appendChild(overlay);
+				});
+			});
+		</script>
+
+		<!-- Heading anchor copy-to-clipboard -->
+		<script>
+			document.querySelectorAll('.heading-anchor').forEach(anchor => {
+				anchor.addEventListener('click', (e) => {
+					e.preventDefault();
+					const href = (anchor as HTMLAnchorElement).href;
+					navigator.clipboard.writeText(href);
+					history.pushState(null, '', (anchor as HTMLAnchorElement).getAttribute('href') || '');
+				});
+			});
 		</script>
 	</body>
 </html>

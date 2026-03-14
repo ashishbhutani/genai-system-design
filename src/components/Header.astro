@@ -1,6 +1,7 @@
 ---
 import { SITE_TITLE, LINKEDIN_URL, GITHUB_URL } from '../consts';
 import HeaderLink from './HeaderLink.astro';
+import ThemeToggle from './ThemeToggle.astro';
 ---
 
 <header>
@@ -12,6 +13,7 @@ import HeaderLink from './HeaderLink.astro';
 			<HeaderLink href="/about">About</HeaderLink>
 		</div>
 		<div class="social-links">
+			<ThemeToggle />
 			<a href={LINKEDIN_URL} target="_blank" rel="noopener noreferrer">
 				<span class="sr-only">Connect on LinkedIn</span>
 				<svg viewBox="0 0 24 24" aria-hidden="true" width="28" height="28"
@@ -37,8 +39,8 @@ import HeaderLink from './HeaderLink.astro';
 	header {
 		margin: 0;
 		padding: 0 1em;
-		background: white;
-		box-shadow: 0 2px 8px rgba(var(--black), 5%);
+		background: var(--header-bg);
+		box-shadow: var(--header-shadow);
 	}
 	h2 {
 		margin: 0;
@@ -56,7 +58,7 @@ import HeaderLink from './HeaderLink.astro';
 	}
 	nav a {
 		padding: 1em 0.5em;
-		color: var(--black);
+		color: var(--text-primary);
 		border-bottom: 4px solid transparent;
 		text-decoration: none;
 	}
