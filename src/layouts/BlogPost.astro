@@ -292,7 +292,7 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 					wrapper.appendChild(imgEl);
 					const caption = document.createElement('figcaption');
 					caption.className = 'prose-img-caption';
-					caption.textContent = alt;
+					caption.textContent = alt.replace(/\\n/g, '\n');
 					wrapper.appendChild(caption);
 				}
 
@@ -307,7 +307,7 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 					if (alt && alt.trim()) {
 						const cap = document.createElement('div');
 						cap.className = 'lightbox-caption';
-						cap.textContent = alt;
+						cap.textContent = alt.replace(/\\n/g, '\n');
 						overlay.appendChild(cap);
 					}
 

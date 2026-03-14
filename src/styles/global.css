@@ -370,6 +370,11 @@ h3:hover .heading-anchor {
 	font-size: 0.85em;
 	margin-top: 0.5em;
 	font-style: italic;
+	white-space: pre-line;
+}
+
+.lightbox-caption {
+	white-space: pre-line;
 }
 
 @media (max-width: 720px) {
