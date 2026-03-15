@@ -1,0 +1,51 @@
+flowchart TD
+    APP["Incoming Application"] --> CR{"Country Router"}
+
+    CR -->|"country=UK"| UK["UK Config"]
+    CR -->|"country=DE"| DE["Germany Config"]
+    CR -->|"country=US"| US["US Config"]
+
+    UK --> DTR1["Doc Types: P60, P45, Council Tax"]
+    UK --> CRL1["Compliance: FCA Rules, LTV 75%"]
+    UK --> DRP1["Data Residency: Cloud Allowed"]
+    UK --> TR1["Tools: Experian UK, Land Registry"]
+
+    DE --> DTR2["Doc Types: Lohnsteuer, Grundbuch"]
+    DE --> CRL2["Compliance: BaFin Rules, LTV 80%"]
+    DE --> DRP2["Data Residency: On-Prem Only"]
+    DE --> TR2["Tools: SCHUFA, Grundbuchamt API"]
+
+    US --> DTR3["Doc Types: W-2, 1040, HUD-1"]
+    US --> CRL3["Compliance: TILA/RESPA, LTV 80%"]
+    US --> DRP3["Data Residency: Cloud Allowed"]
+    US --> TR3["Tools: Equifax, County Records API"]
+
+    DTR1 & DTR2 & DTR3 --> EP["Extraction Prompts"]
+    CRL1 & CRL2 & CRL3 --> RE["Rules Engine"]
+    DRP1 & DRP2 & DRP3 --> DP["Data Path Selector"]
+    TR1 & TR2 & TR3 --> TA["Tool Registry"]
+
+    EP & RE & DP & TA --> WE["Workflow Engine"]
+
+    style APP fill:#f3f4f6,stroke:#6b7280,color:#000
+    style CR fill:#fef3c7,stroke:#d97706,color:#000
+    style UK fill:#dbeafe,stroke:#3b82f6,color:#000
+    style DE fill:#dbeafe,stroke:#3b82f6,color:#000
+    style US fill:#dbeafe,stroke:#3b82f6,color:#000
+    style DTR1 fill:#ede9fe,stroke:#7c3aed,color:#000
+    style DTR2 fill:#ede9fe,stroke:#7c3aed,color:#000
+    style DTR3 fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CRL1 fill:#fee2e2,stroke:#ef4444,color:#000
+    style CRL2 fill:#fee2e2,stroke:#ef4444,color:#000
+    style CRL3 fill:#fee2e2,stroke:#ef4444,color:#000
+    style DRP1 fill:#dcfce7,stroke:#16a34a,color:#000
+    style DRP2 fill:#dcfce7,stroke:#16a34a,color:#000
+    style DRP3 fill:#dcfce7,stroke:#16a34a,color:#000
+    style TR1 fill:#fef3c7,stroke:#d97706,color:#000
+    style TR2 fill:#fef3c7,stroke:#d97706,color:#000
+    style TR3 fill:#fef3c7,stroke:#d97706,color:#000
+    style EP fill:#ede9fe,stroke:#7c3aed,color:#000
+    style RE fill:#fee2e2,stroke:#ef4444,color:#000
+    style DP fill:#dcfce7,stroke:#16a34a,color:#000
+    style TA fill:#fef3c7,stroke:#d97706,color:#000
+    style WE fill:#dbeafe,stroke:#3b82f6,color:#000

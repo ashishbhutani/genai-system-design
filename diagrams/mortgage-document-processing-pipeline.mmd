@@ -1,0 +1,49 @@
+flowchart LR
+    DOC["Document Received"] --> TC{"Type Classifier"}
+    TC -->|"Pay stub"| PS["Pay Stub Template"]
+    TC -->|"Tax return"| TX["Tax Return Template"]
+    TC -->|"Employment letter"| EL["Employment Letter Template"]
+    TC -->|"Unknown"| UNK["Generic Template"]
+
+    PS & TX & EL & UNK --> EXT{"Vision or OCR?"}
+    EXT -->|"High quality scan"| VIS["Vision Model Extraction"]
+    EXT -->|"Poor quality scan"| OCR["OCR + Text LLM"]
+
+    VIS & OCR --> FE["Field Extraction"]
+    FE --> CS["Confidence Scoring"]
+    CS -->|"Score above 0.85"| CR["Cross-Reference Check"]
+    CS -->|"Score below 0.85"| HF["Flag for Human Review"]
+
+    subgraph REACT["ReAct Loop"]
+        direction TB
+        CR --> QRY["Query Related Docs"]
+        QRY --> CMP["Compare Fields"]
+        CMP --> DEC{"Discrepancy?"}
+        DEC -->|"Yes"| INV["Investigate via Tool Call"]
+        INV --> CMP
+        DEC -->|"No"| RES["Resolved"]
+    end
+
+    RES --> SO[/"Structured Output JSON"/]
+    HF --> SO
+
+    style DOC fill:#f3f4f6,stroke:#6b7280,color:#000
+    style TC fill:#fef3c7,stroke:#d97706,color:#000
+    style PS fill:#ede9fe,stroke:#7c3aed,color:#000
+    style TX fill:#ede9fe,stroke:#7c3aed,color:#000
+    style EL fill:#ede9fe,stroke:#7c3aed,color:#000
+    style UNK fill:#ede9fe,stroke:#7c3aed,color:#000
+    style EXT fill:#fef3c7,stroke:#d97706,color:#000
+    style VIS fill:#dbeafe,stroke:#3b82f6,color:#000
+    style OCR fill:#dbeafe,stroke:#3b82f6,color:#000
+    style FE fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CS fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CR fill:#dcfce7,stroke:#16a34a,color:#000
+    style HF fill:#fee2e2,stroke:#ef4444,color:#000
+    style QRY fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CMP fill:#ede9fe,stroke:#7c3aed,color:#000
+    style DEC fill:#fef3c7,stroke:#d97706,color:#000
+    style INV fill:#fee2e2,stroke:#ef4444,color:#000
+    style RES fill:#dcfce7,stroke:#16a34a,color:#000
+    style SO fill:#dcfce7,stroke:#16a34a,color:#000
+    style REACT fill:#f5f3ff,stroke:#7c3aed,color:#000

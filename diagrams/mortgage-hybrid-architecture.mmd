@@ -1,0 +1,51 @@
+flowchart LR
+    subgraph ONPREM["On-Premise Zone"]
+        direction TB
+        DG["Document Gateway"]
+        OCR["OCR Service"]
+        DS[("Document Store")]
+        CB[("Core Banking DB")]
+        CR[("Credit Records")]
+        DA["Data API"]
+        RS["Result Store"]
+    end
+
+    subgraph GCP["GCP Zone"]
+        direction TB
+        VAI["Vertex AI"]
+        AR["Agent Runtime"]
+        WE["Workflow Engine"]
+        RC["Result Cache"]
+        ML["Model Registry"]
+    end
+
+    DG -->|"Ingest docs"| OCR
+    OCR -->|"Store originals"| DS
+    OCR -->|"Extracted text + images"| CI
+    CI{"Cloud Interconnect"} -->|"Encrypted transit"| AR
+    AR -->|"LLM inference"| VAI
+    AR -->|"Orchestration"| WE
+    AR -->|"Query banking data"| CI
+    CI -->|"Secure API calls"| DA
+    DA -->|"Read-only queries"| CB
+    DA -->|"Credit lookups"| CR
+    AR -->|"Cache results"| RC
+    RC -->|"Structured output"| CI
+    CI -->|"Write results"| RS
+    WE -->|"Model selection"| ML
+
+    style ONPREM fill:#fef2f2,stroke:#b91c1c,color:#000
+    style GCP fill:#eff6ff,stroke:#1d4ed8,color:#000
+    style DG fill:#fecaca,stroke:#dc2626,color:#000
+    style OCR fill:#fecaca,stroke:#dc2626,color:#000
+    style DS fill:#e9d5ff,stroke:#7c3aed,color:#000
+    style CB fill:#e9d5ff,stroke:#7c3aed,color:#000
+    style CR fill:#e9d5ff,stroke:#7c3aed,color:#000
+    style DA fill:#fecaca,stroke:#dc2626,color:#000
+    style RS fill:#e9d5ff,stroke:#7c3aed,color:#000
+    style VAI fill:#bfdbfe,stroke:#2563eb,color:#000
+    style AR fill:#bfdbfe,stroke:#2563eb,color:#000
+    style WE fill:#bfdbfe,stroke:#2563eb,color:#000
+    style RC fill:#bfdbfe,stroke:#2563eb,color:#000
+    style ML fill:#bfdbfe,stroke:#2563eb,color:#000
+    style CI fill:#fef3c7,stroke:#d97706,color:#000

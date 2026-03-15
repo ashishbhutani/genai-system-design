@@ -1,0 +1,27 @@
+flowchart LR
+    AR["Application Received"] --> DC["Document Collection"]
+    DC --> DE["Data Extraction"]
+    DE --> CV["Cross-Doc Verification"]
+    CV --> CC["Compliance Check"]
+    CC --> UN["Underwriting Narrative"]
+    UN --> DEC{"Decision"}
+    DEC -->|"Approved"| CL["Closing"]
+    DEC -->|"More info needed"| DC
+    DEC -->|"Rejected"| RJ["Rejected"]
+
+    DE -.->|"Low confidence"| HR1["Human Review"]
+    HR1 -.->|"Corrected"| CV
+    CV -.->|"Unresolved flags"| HR2["Human Review"]
+    HR2 -.->|"Resolved"| CC
+
+    style AR fill:#f3f4f6,stroke:#6b7280,color:#000
+    style DC fill:#f3f4f6,stroke:#6b7280,color:#000
+    style DE fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CV fill:#ede9fe,stroke:#7c3aed,color:#000
+    style CC fill:#fef3c7,stroke:#d97706,color:#000
+    style UN fill:#ede9fe,stroke:#7c3aed,color:#000
+    style DEC fill:#dcfce7,stroke:#16a34a,color:#000
+    style CL fill:#f3f4f6,stroke:#6b7280,color:#000
+    style RJ fill:#fee2e2,stroke:#ef4444,color:#000
+    style HR1 fill:#dcfce7,stroke:#16a34a,color:#000
+    style HR2 fill:#dcfce7,stroke:#16a34a,color:#000

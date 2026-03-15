@@ -1,0 +1,40 @@
+flowchart TD
+    START["Start Verification"] --> EA["Extract from Doc A: Pay Stub"]
+    EA -->|"employer: Acme Corp, salary: 85000"| EB["Extract from Doc B: Employment Letter"]
+    EB -->|"employer: Acme Inc, start: 2023"| CMP{"Compare Fields"}
+
+    CMP -->|"Name mismatch detected"| THINK["Think: Acme Corp vs Acme Inc"]
+    THINK --> TOOL["Tool Call: Query Tax Return via On-Prem API"]
+    TOOL -->|"API returns: employer TIN matches Acme Corp"| EVAL{"Evaluate Evidence"}
+
+    EVAL -->|"TIN confirms same entity"| RESOLVE["Resolve: Name variant, not fraud"]
+    EVAL -->|"No corroboration found"| FLAG["Flag: Employer mismatch for review"]
+
+    CMP -->|"Salary mismatch detected"| THINK2["Think: Stub shows 85K, letter shows 75K"]
+    THINK2 --> TOOL2["Tool Call: Query Bank Statements via On-Prem API"]
+    TOOL2 -->|"Monthly deposits avg 7083"| EVAL2{"Evaluate: 7083 x 12 = 84996"}
+
+    EVAL2 -->|"Deposits match pay stub"| RESOLVE2["Resolve: Letter outdated, stub accurate"]
+    EVAL2 -->|"Deposits don't match either"| FLAG2["Flag: Income discrepancy for review"]
+
+    CMP -->|"All fields consistent"| PASS["Pass: No issues found"]
+
+    RESOLVE & RESOLVE2 & PASS --> OUT[/"Structured Verification Report"/]
+    FLAG & FLAG2 --> OUT
+
+    style START fill:#f3f4f6,stroke:#6b7280,color:#000
+    style EA fill:#dbeafe,stroke:#3b82f6,color:#000
+    style EB fill:#dbeafe,stroke:#3b82f6,color:#000
+    style CMP fill:#fef3c7,stroke:#d97706,color:#000
+    style THINK fill:#ede9fe,stroke:#7c3aed,color:#000
+    style THINK2 fill:#ede9fe,stroke:#7c3aed,color:#000
+    style TOOL fill:#ede9fe,stroke:#7c3aed,color:#000
+    style TOOL2 fill:#ede9fe,stroke:#7c3aed,color:#000
+    style EVAL fill:#fef3c7,stroke:#d97706,color:#000
+    style EVAL2 fill:#fef3c7,stroke:#d97706,color:#000
+    style RESOLVE fill:#dcfce7,stroke:#16a34a,color:#000
+    style RESOLVE2 fill:#dcfce7,stroke:#16a34a,color:#000
+    style FLAG fill:#fee2e2,stroke:#ef4444,color:#000
+    style FLAG2 fill:#fee2e2,stroke:#ef4444,color:#000
+    style PASS fill:#dcfce7,stroke:#16a34a,color:#000
+    style OUT fill:#dcfce7,stroke:#16a34a,color:#000
