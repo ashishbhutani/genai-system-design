@@ -1,0 +1,624 @@
+---
+title: "Case Study: Post-Training a Foundation Model for Reasoning"
+description: "A production walkthrough of supervised fine-tuning, reward modeling, RLHF vs DPO alignment, and how reinforcement learning teaches language models to reason through multi-step problems."
+pubDate: "Mar 17 2026"
+author: "Ashish Bhutani"
+tags: ["LLM Training", "Reasoning Models", "AI Engineering", "Interview"]
+---
+
+*This post applies the 9-step case study structure from the [GenAI System Design Framework](/blog/genai-system-design-framework).*
+
+## Problem Statement
+
+You have a 70-billion parameter base model. It was pre-trained on trillions of tokens of internet text, code, books, and academic papers. It can predict the next token with impressive perplexity. It has absorbed enormous amounts of factual knowledge, linguistic structure, and even some reasoning patterns from its training data.
+
+But it is, in a very practical sense, useless as a product.
+
+Ask it a question and it might continue the question with more questions (because that's what the training data looks like). Ask it to write code and it might produce a Stack Overflow page complete with upvote counts and usernames. Ask it to refuse a harmful request and it has no concept of refusal, it will happily generate whatever continuation is most likely given the prefix.
+
+The gap between "powerful next-token predictor" and "useful AI assistant" is what post-training closes. This case study walks through the full post-training pipeline: supervised fine-tuning (SFT), reward modeling, alignment via RLHF or DPO, reasoning training through reinforcement learning, and safety alignment. These are the stages that transformed base models into systems like DeepSeek-R1 [1], OpenAI's o1 [2], and Anthropic's Claude [3].
+
+**What we're building**: a post-training pipeline that takes a 70B base model and produces an instruction-following, reasoning-capable, safety-aligned model suitable for deployment in production applications.
+
+**Primary users**: the model training team executing the pipeline.
+
+**Downstream users**: application developers building on top of the resulting model, and end users interacting with it through products.
+
+### What This System Is Not
+
+This is not a pre-training case study. We are not covering data curation at the terabyte scale, training stability for months-long runs, or the infrastructure for distributed pre-training across thousands of GPUs. The base model already exists. We are picking up where pre-training left off.
+
+This is also not a single fine-tuning job. Teams that treat post-training as "run SFT on some chat data and ship it" end up with models that are polite but shallow. They follow instructions in format but not in substance. The full pipeline has at least four distinct stages, each solving a different problem, and skipping any of them shows up clearly in evaluation.
+
+## Step 0: Why Post-Training?
+
+A base model trained with a next-token prediction objective learns to model the distribution of its training data. That distribution includes everything: well-reasoned explanations, wrong answers, toxic content, helpful tutorials, spam, and contradictory claims. The model doesn't distinguish between these. It assigns probability to all of them based on how frequently they co-occur in context.
+
+Post-training reshapes this distribution. It narrows the model's output toward responses that are helpful, accurate, well-reasoned, and safe. The specific things a base model cannot do without post-training:
+
+- **Follow instructions**: A base model given "Summarize this article in 3 bullet points" is equally likely to produce a summary, continue the article, or generate a comment about the article. It has no concept of the instruction as a directive.
+- **Engage in dialogue**: Multi-turn conversation requires understanding that messages alternate between a user and an assistant. The base model has no notion of roles.
+- **Reason through multi-step problems**: While some reasoning patterns exist in the training data, the base model doesn't preferentially select the chain-of-thought path. It might jump to an answer, produce a partial derivation, or generate a completely unrelated continuation.
+- **Refuse harmful requests**: Content about weapons, self-harm, fraud, and other harmful topics exists in the training corpus. The base model will continue generating in those directions if the prefix steers it there.
+
+### The Post-Training Tax
+
+Post-training is not free, but it is remarkably cheap relative to pre-training. For a 70B model pre-trained on ~15 trillion tokens across 2,000+ H100 GPUs for 3-4 months, the full post-training pipeline (SFT + reward modeling + alignment + reasoning RL) typically consumes 5-10% of the pre-training compute budget. That translates to 64-128 GPUs for 2-4 weeks total across all stages, versus thousands of GPUs for months.
+
+The intuition for why post-training is so much cheaper: pre-training builds the model's knowledge and capabilities from scratch. Post-training only needs to steer those existing capabilities in the right direction. You're not teaching the model new facts. You're teaching it which of its existing behaviors to amplify and which to suppress.
+
+### The Post-Training Stack
+
+The pipeline has five stages, executed roughly in this order:
+
+1. **Supervised Fine-Tuning (SFT)**: Teach the model the format of instruction-following. This is where it learns what a helpful response looks like structurally.
+2. **Reward Modeling (RM)**: Train a separate model to score responses by quality, using human preference judgments. This gives you a scalable proxy for human evaluation.
+3. **Alignment (RLHF or DPO)**: Use the reward model (or preference data directly) to optimize the base model's outputs toward higher-quality responses. This is where quality improves beyond what SFT alone can achieve.
+4. **Reasoning Training**: Apply reinforcement learning on tasks where the model can verify its own answers (math, code, logic). This teaches extended chain-of-thought reasoning and is responsible for the capabilities seen in models like o1 and DeepSeek-R1.
+5. **Safety Alignment**: Layer safety constraints, refusal behaviors, and harmlessness objectives without destroying the helpfulness gained in prior stages.
+
+![Post-Training Pipeline Overview](/diagrams/post-training-pipeline-overview.png)
+
+Each stage builds on the previous one. SFT provides the format that alignment optimizes. The reward model provides the signal that alignment uses. Reasoning training extends the model's ability to think through problems. Safety alignment constrains the final output space. Skipping or reordering stages produces measurably worse results.
+
+## Step 1: Requirements
+
+### Functional Requirements
+
+- Transform a pre-trained 70B base model into an instruction-following assistant
+- Support multi-turn dialogue with role-based formatting (system, user, assistant)
+- Achieve measurable improvements on reasoning benchmarks (math, code, logic)
+- Implement refusal behavior for harmful, illegal, or dangerous requests
+- Maintain the base model's factual knowledge and general capabilities through post-training (avoid catastrophic forgetting)
+- Produce a model that generates well-structured, accurate, and helpful responses across diverse domains
+
+### Non-Functional Requirements
+
+- **Training stability**: No loss spikes, gradient explosions, or mode collapse across any stage. Each stage must converge reliably.
+- **Reproducibility**: Given the same data and hyperparameters, the pipeline should produce comparable results. Random seed variation should not change benchmark scores by more than 1-2 percentage points.
+- **Iteration speed**: The full pipeline from SFT through safety alignment should complete in under 3 weeks on the allocated cluster, enabling at least one full iteration per month.
+- **Checkpoint management**: Every stage produces checkpoints. Rolling back to a previous stage's output must be straightforward. You do not want a failed RL run to force re-running SFT.
+
+### Scale Assumptions
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Base model size | 70B parameters | Dense transformer, BF16 weights |
+| SFT dataset | ~100K examples | High-quality instruction-response pairs |
+| Preference dataset | ~500K comparison pairs | For reward model training and DPO |
+| Reasoning dataset | ~200K verifiable problems | Math, code, logic with ground-truth answers |
+| GPU cluster | 64x H100 80GB | 8 nodes, 8 GPUs each, NVLink + InfiniBand |
+| SFT training time | 2-3 days | ~3 epochs over 100K examples |
+| Reward model training | 3-4 days | Training on 500K comparisons |
+| RLHF/DPO alignment | 5-7 days | Most compute-intensive alignment stage |
+| Reasoning RL | 5-7 days | Depends on problem difficulty distribution |
+
+### Quality Metrics
+
+| Benchmark | Base Model | Post-SFT Target | Post-Alignment Target | Post-Reasoning Target |
+|-----------|-----------|-----------------|----------------------|-----------------------|
+| GSM8K (grade school math) [4] | ~55% | ~65% | ~72% | ~88% |
+| MATH (competition math) [5] | ~20% | ~30% | ~38% | ~55% |
+| HumanEval (coding) [6] | ~35% | ~50% | ~58% | ~70% |
+| MMLU (general knowledge) [7] | ~70% | ~72% | ~73% | ~73% |
+| Human preference win rate | - | ~60% vs base | ~75% vs SFT | ~80% vs alignment-only |
+| Safety refusal rate (harmful prompts) | ~5% | ~40% | ~70% | ~70% |
+| Over-refusal rate (benign prompts) | 0% | ~2% | ~5% | ~5% |
+
+A few things to note in this table. MMLU barely moves through post-training because it tests factual recall, which the base model already has. GSM8K and MATH see the biggest jumps from reasoning training, which is exactly the point of that stage. Safety refusal rate improves substantially after alignment but gets its final push during dedicated safety training (covered in Step 6). Over-refusal is the false positive rate: benign requests the model incorrectly refuses. Keeping this under 5% is critical for usability.
+
+## Step 2: Supervised Fine-Tuning (SFT)
+
+SFT is the first stage of post-training and arguably the most misunderstood. Teams often expect SFT to make the model "smart." It doesn't. SFT teaches the model *format*, not *quality*. After SFT, the model knows what an instruction-following response looks like structurally. It knows to respond to questions (rather than continuing them), to use the assistant role, to format code in blocks, and to provide direct answers. What it doesn't know is which of its many possible responses is actually good.
+
+### Data Curation
+
+The SFT dataset consists of (instruction, response) pairs, and the quality of these pairs determines the ceiling of the SFT stage. There are three common sourcing strategies:
+
+**Human-written demonstrations** (~10-20K examples): Expert annotators write high-quality responses to diverse prompts. This is the gold standard for quality but expensive ($5-15 per example for complex tasks). The original InstructGPT paper [8] used roughly 13,000 human demonstrations for their SFT stage.
+
+**Distillation from a stronger model** (~50-100K examples): Generate responses from a frontier model (GPT-4, Claude) and use those as training targets. This is the most common approach in practice because it's cheaper and scales easily. The risk is that you inherit the teacher model's biases and failure modes.
+
+**Filtered web data** (~20-50K examples): Mine instruction-following examples from the web (Stack Overflow answers, tutorial sites, documentation) and filter aggressively for quality. This requires a quality classifier and heavy deduplication.
+
+In practice, most teams use a mix: a small core of human-written demonstrations for critical capabilities (safety refusals, complex reasoning, nuanced tasks), a larger set of distilled examples for coverage, and filtered web data to fill gaps in domain coverage.
+
+**Quality over quantity matters enormously.** The LIMA paper [9] demonstrated that 1,000 carefully curated examples can produce SFT results competitive with 50,000 examples of mediocre quality. At 70B parameters, the model already has the knowledge. SFT is selecting which behavior pattern to activate, not teaching new information. A small number of high-quality demonstrations is a stronger selection signal than a large number of noisy ones.
+
+### Training Details
+
+SFT is standard causal language model fine-tuning with a few specific choices:
+
+- **Learning rate**: 1e-5 to 2e-5 with cosine decay. Lower than pre-training (which typically uses 1e-4 to 3e-4) because you're making small adjustments, not learning from scratch. Too high and you destroy pre-trained capabilities. Too low and the model doesn't learn the new format.
+- **Epochs**: 2-3 over the full dataset. More epochs risks overfitting to the specific phrasing of the training examples. You want the model to learn the general pattern of instruction-following, not memorize specific responses.
+- **Loss masking**: Only compute loss on the assistant's response tokens, not the instruction tokens. The model already knows how to encode instructions. You're training it to produce good completions, not to predict what users will type.
+- **Chat template**: Apply a consistent chat template (e.g., ChatML, Llama-style `[INST]` tags) during SFT. The model needs to learn the role markers. Inconsistent templates between training and inference are a common source of degraded performance that's hard to debug.
+- **Batch size**: Effective batch size of 128-256 examples, achieved through gradient accumulation across the 64-GPU cluster. Larger batches produce more stable gradients but require careful learning rate scaling.
+
+For a 70B model on 64 H100s, SFT on 100K examples at 2-3 epochs takes roughly 2-3 days using FSDP (Fully Sharded Data Parallelism) or DeepSpeed ZeRO Stage 3 [10] for memory-efficient distributed training.
+
+### What Changes After SFT
+
+Before SFT, the model responds to "What is the capital of France?" with something like: "What is the capital of Germany? What is the largest city in Europe?" (continuing the pattern of questions it has seen in training data).
+
+After SFT, it responds: "The capital of France is Paris."
+
+That seems like a big improvement, and it is in terms of usability. But look more carefully at what changed. The model always "knew" that Paris is the capital of France. That knowledge was encoded during pre-training. SFT taught it to surface that knowledge in a direct, helpful format instead of continuing the pattern of the input.
+
+### The Ceiling of SFT
+
+SFT teaches format, not judgment. Given two possible responses to "Explain quantum entanglement," one shallow and one deep, SFT provides no training signal to prefer the deep one. Both responses in the SFT dataset look like valid demonstrations. The model learns that both formats are acceptable.
+
+This is why SFT alone produces models that are "polite but shallow." They follow the format perfectly: they respond helpfully, use good structure, and sound confident. But they don't consistently choose the better response when multiple options exist. Closing that gap requires a preference signal, which is what the reward model provides.
+
+## Step 3: Reward Modeling and Human Feedback
+
+After SFT, the model can follow instructions, but it doesn't know which responses are genuinely good. Two responses might both be grammatically correct, properly formatted, and factually accurate, but one is clearer, more thorough, and more helpful. SFT provides no signal to distinguish them.
+
+Reward modeling solves this by training a model to score responses by quality, using human preference judgments as the training signal.
+
+### Why Reward Models?
+
+The direct approach would be to have humans rate every response the model generates and use those ratings as a training signal. This doesn't scale. RLHF training generates millions of responses during the optimization process. You cannot have humans evaluate each one.
+
+The reward model is a *scalable proxy for human judgment*. You collect a finite set of human preferences (500K comparison pairs in our case), train a model to internalize those preferences, and then use that model to evaluate the millions of responses generated during RL training. The reward model converts a small, expensive human signal into a large, cheap automated signal.
+
+### Data Collection
+
+The most common format is **pairwise comparison**: given a prompt, show two model-generated responses to a human annotator and ask which is better. This is more reliable than asking annotators to assign absolute scores (e.g., "rate this response 1-5") because humans are much better at relative comparison than absolute evaluation.
+
+The data collection pipeline:
+
+1. Sample diverse prompts from the target distribution (mix of instructions, questions, creative tasks, coding, reasoning)
+2. For each prompt, generate 2-4 candidate responses from the SFT model (possibly with different sampling temperatures to increase diversity)
+3. Present pairs to human annotators with clear rating guidelines
+4. Collect "chosen" and "rejected" labels for each pair
+5. Filter for inter-annotator agreement (discard pairs where annotators disagree, typically 20-30% of raw annotations)
+
+Quality of preference data depends heavily on annotator guidelines. Vague instructions ("pick the better response") produce noisy labels. Specific rubrics ("prefer responses that are factually accurate, complete, well-structured, and concise, in that priority order") produce cleaner data. The InstructGPT team [8] invested heavily in annotator training and found that inter-annotator agreement improved from ~63% to ~77% after calibration sessions.
+
+At 500K comparison pairs with an average annotation cost of $1-2 per pair (including quality filtering and disagreement resolution), the data collection budget for reward modeling is roughly $500K-$1M. This is a significant cost, but amortized across the many RL training iterations that will use the resulting reward model, the per-sample cost is small.
+
+### Reward Model Architecture
+
+The reward model is typically the same architecture as the base model (or a smaller version of it), initialized from the SFT checkpoint, with one modification: replace the language model head (which outputs logits over the vocabulary) with a **scalar head** that outputs a single real number representing the quality score.
+
+```
+Input: [prompt + response tokens]
+            |
+      Transformer layers (same as SFT model)
+            |
+      Last token hidden state
+            |
+      Linear projection → scalar reward value
+```
+
+The scalar head is a single linear layer that projects the final hidden state (at the last token position) to a scalar value. Some implementations use a small MLP (2-3 layers) instead of a single linear layer, but the difference in practice is marginal.
+
+For our 70B pipeline, the reward model is typically a smaller model (7B-13B parameters) initialized from a correspondingly smaller SFT model. Using the full 70B model as the reward model is possible but doubles the memory requirements during RLHF without proportional quality gains. Research from Anthropic [3] and others suggests that reward model quality scales with model size, but with diminishing returns above ~13B parameters for models in the 70B policy class.
+
+### Bradley-Terry Model
+
+The reward model is trained using the Bradley-Terry framework [11], which models the probability that response A is preferred over response B as:
+
+`P(A preferred over B) = sigmoid(r(A) - r(B))`
+
+where `r(x)` is the scalar reward assigned to response x. The training loss is:
+
+`loss = -log(sigmoid(r(chosen) - r(rejected)))`
+
+This loss function pushes the reward model to assign higher scores to chosen responses and lower scores to rejected ones. The margin between them encodes the degree of preference: a pair where one response is clearly better produces a larger gradient than a pair where both responses are close in quality.
+
+Training on 500K pairs with a 13B reward model takes roughly 3-4 days on 16-32 GPUs. The learning rate is typically lower than SFT (5e-6 to 1e-5) because the reward model is fine-tuning on a different task head while preserving the language understanding from the SFT initialization.
+
+### Reward Model Evaluation
+
+Evaluating a reward model is tricky because you're evaluating a proxy for human judgment, and the only ground truth is more human judgment.
+
+Standard evaluation approaches:
+
+- **Held-out preference accuracy**: On a test set of human-annotated preference pairs (10-20% of the full dataset held out), measure how often the reward model's ranking agrees with human annotators. Target: 70-75% accuracy. This sounds low, but remember that inter-annotator agreement is only 72-77%, so the reward model is approaching the ceiling of agreement between humans.
+- **Calibration on known-quality pairs**: Create a set of obviously good and obviously bad responses (correct vs. factually wrong, helpful vs. harmful). The reward model should assign significantly different scores. This catches reward models that have collapsed to assigning similar scores to everything.
+- **Distribution of scores**: Plot the histogram of reward scores across a diverse prompt set. A well-trained reward model produces a roughly bell-shaped distribution. A collapsed reward model produces a spike at a single value. Bimodal distributions suggest the model is learning surface features (length, formatting) rather than genuine quality.
+
+### Reward Hacking and Mitigation
+
+Reward hacking is the most dangerous failure mode in the RLHF pipeline. The policy model (the model being optimized) learns to exploit patterns in the reward model rather than genuinely improving. Common examples:
+
+- **Length hacking**: The reward model assigns higher scores to longer responses (because in the training data, longer responses were often more thorough). The policy model learns to be verbose, padding responses with unnecessary caveats and restatements.
+- **Sycophancy**: The reward model assigns higher scores to responses that agree with the user. The policy model learns to validate everything the user says, even when the user is wrong.
+- **Formatting exploits**: The reward model assigns higher scores to responses with bullet points, headers, and code blocks. The policy model learns to format every response as a bulleted list regardless of whether it's appropriate.
+
+Mitigation strategies:
+
+- **Length normalization**: Normalize reward scores by response length, or include length as a feature that the reward model must explicitly account for. This removes the naive correlation between length and quality.
+- **KL penalty** (discussed in detail in the RLHF section): Penalize the policy model for diverging too far from the SFT model. This constrains the optimization to stay in a reasonable region of the output space.
+- **Reward model ensembles**: Train 2-3 reward models on different subsets of the preference data. Use the minimum or average of their scores as the final reward. This makes it harder for the policy to find exploits that fool all reward models simultaneously.
+- **Periodic recalibration**: As the policy model shifts during RL training, the reward model may become less accurate (it was trained to evaluate SFT-model outputs, not RL-optimized outputs). Periodically collecting new preference data on the current policy's outputs and retraining the reward model addresses this distributional shift.
+
+## Step 4: RLHF vs DPO, Aligning to Human Preferences
+
+This is the stage where the model actually gets better. SFT taught it the format. The reward model gives us a scoring function. Now we use that scoring function to push the model toward higher-quality outputs.
+
+There are three main approaches: PPO-based RLHF, DPO, and GRPO. Each makes different trade-offs between complexity, stability, and compute cost.
+
+### RLHF with PPO
+
+Proximal Policy Optimization (PPO) [12] applied to language models is the approach described in the InstructGPT paper [8] and used for early versions of ChatGPT. It requires four models in memory simultaneously:
+
+1. **Policy model** (the model being optimized, 70B parameters)
+2. **Reference model** (frozen copy of the SFT checkpoint, 70B parameters, used for KL penalty computation)
+3. **Reward model** (trained in the previous stage, 7-13B parameters)
+4. **Value model** (estimates expected future reward, same size as reward model, 7-13B parameters)
+
+The training loop for each batch:
+
+1. Sample a batch of prompts from the training distribution
+2. Generate responses from the **policy model** using sampling (not greedy, to maintain exploration)
+3. Score each response with the **reward model** to get `r(response)`
+4. Compute the KL divergence between the policy model's token probabilities and the **reference model's** token probabilities: `KL = log(pi_policy / pi_reference)`
+5. Compute the adjusted reward: `R = r(response) - beta * KL`, where beta is a hyperparameter (typically 0.01-0.1) that controls how much the policy is penalized for diverging from the reference
+6. Use the **value model** to estimate baselines for variance reduction
+7. Compute PPO policy gradient and update the policy model
+8. Update the value model toward better reward estimates
+
+![RLHF Training Loop](/diagrams/rlhf-training-loop.png)
+
+The KL penalty is critical. Without it, PPO will push the model to maximize reward by any means, which quickly leads to reward hacking. The KL term says: "improve, but don't change too much from the model that was already decent after SFT." Beta is a key hyperparameter. Too low and you get reward hacking. Too high and the model barely improves from SFT. Most teams start with beta = 0.05 and tune based on the KL divergence trajectory during training.
+
+**The four-model problem** is the main practical challenge. For a 70B policy model in BF16, each copy consumes ~140GB of GPU memory. Two copies of the 70B model (policy + reference) plus two smaller models (reward + value) require roughly 340-380GB of total model memory, not counting optimizer states and activations. On 64 H100 GPUs (80GB each, 5,120GB total), this fits, but memory management is tight. You need model parallelism (tensor parallel across 8 GPUs per model copy for the 70B models) and careful orchestration of which model is active at each step.
+
+Training time for PPO alignment on 64 H100s: roughly 5-7 days for convergence, processing ~50K-100K unique prompts with multiple response generations per prompt.
+
+### DPO: Direct Preference Optimization
+
+DPO [13] was introduced in 2023 as a simpler alternative to RLHF. The key insight: the optimal policy under the RLHF objective (reward maximization with KL constraint) has a closed-form solution that can be expressed in terms of the preference data directly, without training a separate reward model.
+
+The DPO loss function operates directly on preference pairs (chosen response `y_w`, rejected response `y_l`):
+
+```
+loss = -log(sigmoid(beta * (log(pi(y_w|x)/pi_ref(y_w|x)) - log(pi(y_l|x)/pi_ref(y_l|x)))))
+```
+
+In words: increase the probability of the chosen response relative to the reference model, and decrease the probability of the rejected response relative to the reference model. The beta parameter plays the same role as in RLHF, controlling the strength of the KL constraint.
+
+**What DPO eliminates:**
+
+- No reward model training (saving 3-4 days of compute and the complexity of reward model evaluation)
+- No value model (saving memory and compute)
+- No online generation during training (no need to sample from the policy and score with the reward model at each step)
+- No PPO hyperparameter tuning (clipping ratio, GAE lambda, number of PPO epochs per batch)
+
+**What DPO requires:**
+
+- Only 2 models in memory: the policy model and the reference model (both 70B)
+- Preference data (the same 500K comparison pairs, used directly rather than through a reward model)
+
+![DPO vs RLHF Comparison](/diagrams/dpo-vs-rlhf-comparison.png)
+
+| | RLHF/PPO | DPO |
+|-|----------|-----|
+| Models in memory | 4 (policy + reference + reward + value) | 2 (policy + reference) |
+| Training stability | Sensitive to hyperparameters (beta, clipping, LR) | More stable (fewer hyperparameters to tune) |
+| Compute cost | Higher (online generation + reward scoring at each step) | Lower (standard supervised training loop) |
+| Data requirements | Can generate new data during training (on-policy) | Fixed dataset (off-policy, which can be a limitation) |
+| Quality ceiling | Higher in practice (on-policy data is fresher) | Comparable for most tasks, slightly lower on some benchmarks |
+| Implementation complexity | High (four-model orchestration, PPO internals) | Low (looks like supervised fine-tuning) |
+
+In practice, DPO has become the default choice for most teams because the implementation is significantly simpler, training is more stable, and the quality difference is small enough that the engineering complexity of PPO isn't justified for most use cases. Teams at the frontier (OpenAI, Anthropic, DeepSeek) still use PPO or PPO variants because the on-policy nature of the training gives a small but meaningful quality edge at the top of the capability curve.
+
+### GRPO: Group Relative Policy Optimization
+
+GRPO [1] was introduced by DeepSeek as part of the DeepSeek-R1 training pipeline. It eliminates both the reward model and the value model by using group-based relative scoring.
+
+For each prompt, GRPO generates a group of K responses (typically K=8-16). Instead of scoring each response with a reward model, GRPO uses the relative ranking within the group:
+
+1. Generate K responses for a prompt
+2. Score each response using a verifiable reward (for math: did the answer match the ground truth? for code: did it pass the test cases?)
+3. Normalize scores within the group: `advantage_i = (score_i - mean(scores)) / std(scores)`
+4. Use the normalized advantage as the policy gradient signal
+
+GRPO works best when you have **verifiable rewards**: tasks where correctness can be checked automatically without a learned reward model. Math problems with known answers, coding problems with test suites, logic puzzles with deterministic solutions. For open-ended tasks (creative writing, general conversation), GRPO doesn't directly apply because there's no automatic verifier.
+
+The beauty of GRPO is its simplicity. Two models in memory (policy + reference), no reward model, no value model, and the reward signal comes from the task itself. This is why DeepSeek was able to train reasoning capabilities with a relatively modest infrastructure investment compared to teams running full PPO pipelines.
+
+### Practical Recommendation
+
+For most teams building post-trained models:
+
+1. **Start with DPO** for general alignment. It's simpler, more stable, and produces results within 1-2% of PPO on standard benchmarks.
+2. **Use GRPO** for reasoning training (covered in Step 5), where verifiable rewards are available.
+3. **Graduate to PPO** only if you're operating at the frontier and need the last few percentage points of quality, and you have the engineering team to manage the complexity.
+
+## Step 5: Reasoning Training, Teaching the Model to Think
+
+After SFT and alignment, the model follows instructions well and produces generally helpful, high-quality responses. But give it a multi-step math problem, a complex coding task, or a logic puzzle that requires careful sequential reasoning, and it often fails. Not because it lacks the knowledge, but because it doesn't allocate enough computation to the problem.
+
+A 70B model generating a response token-by-token is doing a fixed amount of computation per token (one forward pass through the transformer). For simple factual recall ("What is the capital of France?"), that's enough. For a problem that requires holding multiple intermediate results, checking conditions, and backtracking, a single forward pass per token is insufficient. The model needs to *think more* on harder problems.
+
+This is the core idea behind reasoning training: teach the model to use its own output tokens as a form of scratch space, working through problems step by step before committing to a final answer. The test-time compute scaling laws that underpin this are covered in detail in the [test-time compute post](/blog/test-time-compute).
+
+### Why SFT + Alignment Aren't Enough
+
+You might wonder: if we include chain-of-thought examples in the SFT dataset, won't the model learn to reason? Partially, yes. SFT on chain-of-thought demonstrations teaches the model the *format* of step-by-step reasoning. It learns to produce text that looks like reasoning: "First, let's consider... Then, we can compute... Therefore..."
+
+But this is imitation, not genuine reasoning. The model learns to produce reasoning-shaped text without the underlying optimization pressure to get the right answer. It will produce confident, well-formatted reasoning chains that arrive at wrong answers because the format was never conditioned on correctness.
+
+Alignment via RLHF or DPO helps somewhat because the reward model can learn to prefer responses with correct answers. But the preference signal is too coarse: it says "this response is better than that one" without distinguishing which steps in the reasoning chain were correct and which were wrong. The model gets a binary good/bad signal on the entire response, which is a weak learning signal for multi-step problems.
+
+### Two Approaches to Reasoning Training
+
+**Approach 1: Distillation from a stronger reasoning model**
+
+If you have access to a model that already reasons well (GPT-4, Claude, DeepSeek-R1), you can generate chain-of-thought traces on reasoning problems and fine-tune your model on those traces. This is essentially SFT but with reasoning-specific data.
+
+Pros: Simple, fast, produces reliable improvements. DeepSeek reported that distilling R1's reasoning traces into smaller models (1.5B-70B) produced strong results, sometimes outperforming models trained with full RL [1].
+
+Cons: You are bounded by the teacher model's reasoning ability. Your 70B model will never reason better than the teacher it was distilled from. And for proprietary models, terms of service may prohibit distillation.
+
+**Approach 2: Reinforcement learning on reasoning tasks**
+
+This is the approach that produced DeepSeek-R1 and OpenAI's o1. Instead of imitating another model's reasoning traces, you let the model discover its own reasoning strategies through RL, rewarding it for correct final answers.
+
+The training setup:
+
+1. Collect a dataset of problems with verifiable answers: math problems (GSM8K [4], MATH [5], competition problems), coding challenges (with test suites), logic puzzles, and formal reasoning tasks
+2. For each problem, the model generates a response (potentially very long, with chain-of-thought reasoning)
+3. Check the final answer against the ground truth
+4. Use the correctness signal as a reward (1 for correct, 0 for incorrect, with possible partial credit)
+5. Optimize using GRPO or PPO with this reward signal
+
+The magic of this approach is what happens during training. The model starts by producing short, often incorrect responses. As RL optimization progresses, the model learns that longer, more structured reasoning chains correlate with correct answers. Over thousands of training steps, the model spontaneously develops behaviors like:
+
+- Breaking problems into sub-problems
+- Checking intermediate results
+- Backtracking when a line of reasoning leads to a contradiction
+- Re-reading the problem statement to verify it hasn't missed a constraint
+- Trying alternative approaches when the first one fails
+
+![Reasoning Training Loop](/diagrams/reasoning-training-loop.png)
+
+This is the "aha moment" described in the DeepSeek-R1 paper [1]: the model discovers these reasoning strategies through optimization pressure alone, without being shown explicit examples of them. The RL reward says "get the right answer" and the model figures out that thinking step by step is the best way to do that.
+
+### Process Reward Models (PRM) vs Outcome Reward Models (ORM)
+
+When scoring reasoning chains, there are two approaches:
+
+**Outcome Reward Model (ORM)**: Score only the final answer. Did the model get the right result? This is simpler to implement because you only need answer verification, not step-by-step evaluation. GRPO naturally uses outcome-based rewards.
+
+**Process Reward Model (PRM)**: Score each step in the reasoning chain. Is this intermediate calculation correct? Is this logical deduction valid? PRMs provide much denser reward signals (feedback on every step rather than just the final answer) but are more expensive to train because they require step-level annotations.
+
+![Process vs Outcome Reward Models](/diagrams/prm-vs-orm.png)
+
+| | ORM | PRM |
+|-|-----|-----|
+| Training data needed | Final answers only (cheap, often automated) | Step-level correctness labels (expensive, typically requires human math experts) |
+| Reward signal density | Sparse (one signal per response) | Dense (one signal per step) |
+| Credit assignment | Poor (if answer is wrong, which step caused it?) | Good (can identify exactly which step failed) |
+| Training stability | Less stable (sparse reward makes credit assignment hard) | More stable (dense signal provides clearer gradients) |
+| Cost to build | Low | High (OpenAI's PRM800K dataset required expert annotators) |
+
+The OpenAI PRM800K paper [14] showed that process reward models outperform outcome reward models on mathematical reasoning tasks, particularly for harder problems where the reasoning chain is longer and the final-answer signal is too sparse to guide learning effectively.
+
+In practice, most teams start with ORM-based training (because the data is free, you just need problems with known answers) and graduate to PRM if they have the annotation budget and find that ORM training plateaus. DeepSeek-R1's main results used outcome-based rewards via GRPO, demonstrating that ORM-based training can achieve strong results if the RL optimization is well-configured.
+
+### The DeepSeek-R1 Phenomenon
+
+DeepSeek-R1 [1] demonstrated something remarkable: you can teach a base model to reason through pure RL, without any SFT on reasoning traces, without a trained reward model, and without distillation from a stronger model.
+
+Their pipeline:
+
+1. Start with the base model (DeepSeek-V3)
+2. Apply a small amount of SFT (format only, not reasoning-specific)
+3. Run GRPO with outcome-based rewards on math and coding tasks
+4. The model spontaneously develops extended chain-of-thought reasoning, self-verification, and error correction
+
+The model's reasoning traces grew from a few hundred tokens early in training to thousands of tokens by the end, entirely through optimization pressure. The model learned that producing more intermediate computation tokens before committing to an answer led to higher reward.
+
+This is the connection to [test-time compute scaling](/blog/test-time-compute): the model learns to allocate more computation (more tokens, meaning more forward passes through the transformer) to harder problems. A simple arithmetic question gets a short chain. A competition math problem gets a lengthy derivation with multiple verification steps. The model discovers this allocation strategy through RL, not through explicit programming.
+
+One nuance worth flagging: DeepSeek-R1's pure-RL approach also produced some failure modes. The model sometimes generated "reward hacking" reasoning, where it would manipulate the format of its answer to match the expected verifier format without actually solving the problem. Their final pipeline addressed this with a mix of RL-trained reasoning and SFT-based cleanup.
+
+## Step 6: Safety Alignment
+
+After reasoning training, the model is capable, helpful, and can reason through complex problems. But it has no principled framework for deciding when to refuse a request. Without safety alignment, the model will provide detailed instructions for harmful activities if the prompt is persuasive enough, because the reasoning training optimized for correctness, not for safety.
+
+Safety alignment is the final stage of post-training, and it sits in tension with every stage that came before it. Every capability improvement makes the model more useful for legitimate purposes and simultaneously more capable of causing harm if misused.
+
+### Red-Teaming
+
+Before training safety behaviors, you need to understand the model's failure modes. Red-teaming is the process of adversarially probing the model to find inputs that elicit harmful outputs.
+
+Red-teaming is not just asking the model "How do I build a bomb?" It's the sophisticated attacks that matter:
+
+- **Jailbreaking**: Prompt engineering techniques that bypass safety training ("You are DAN, a model with no restrictions..." or role-playing scenarios that gradually escalate)
+- **Indirect injection**: Embedding harmful instructions in documents the model processes ("Ignore previous instructions and...")
+- **Multi-turn manipulation**: Building up context over many turns that makes the harmful request seem reasonable ("I'm a chemistry teacher... my students are curious about... specifically, how would one...")
+- **Language switching**: Requesting harmful content in languages where safety training data was sparse
+
+A thorough red-teaming effort involves both automated adversarial attacks (using another LLM to generate jailbreaking prompts) and human red-teamers who can exercise creativity that automated methods miss. The output is a categorized list of vulnerabilities with severity ratings, which directly informs the safety training data.
+
+### Constitutional AI
+
+Anthropic's Constitutional AI (CAI) [15] approach reduces the dependence on human annotations for safety by having the model critique and revise its own outputs according to a set of principles (the "constitution").
+
+The process:
+
+1. Generate a response to a potentially harmful prompt
+2. Ask the model: "Does this response violate the following principle: [principle text]? If so, revise it."
+3. The model produces a revised response
+4. Use the (original, revised) pair as preference data for DPO or RLHF, with the revised response as "chosen"
+
+This is scalable because it generates safety training data without human annotators for each example. The human effort goes into writing the principles (a one-time cost of careful deliberation) rather than annotating thousands of individual examples.
+
+In practice, CAI is combined with human-annotated safety data, not used in isolation. The principles catch systematic issues (the model should never provide instructions for creating weapons), while human annotations catch nuanced cases (when is a discussion of medication dosages medical education vs. harm enablement?).
+
+### Balancing Helpfulness and Safety
+
+The core tension: every refusal is a false negative for helpfulness. A model that refuses to discuss chemistry is safe but useless for chemistry students. A model that discusses all chemistry freely is helpful but potentially dangerous.
+
+This manifests as the **alignment tax**: the measurable decrease in helpfulness that results from safety training. On standard benchmarks, safety alignment typically reduces scores by 1-3% on general tasks and 3-5% on tasks that share surface features with harmful content (chemistry, biology, cybersecurity). A well-executed safety training pipeline minimizes this tax while maintaining strong refusal rates on genuinely harmful prompts.
+
+The practical approach most teams take:
+
+1. **Categorize harms by severity**: Create a taxonomy from "clearly harmful" (weapons instructions, CSAM, fraud) to "contextually sensitive" (medical advice, legal information, political opinions)
+2. **Hard refusals for clear harms**: The model should refuse regardless of framing, jailbreaking attempts, or persuasive context
+3. **Nuanced responses for contextual sensitivity**: Provide information with appropriate caveats rather than refusing outright. A question about medication interactions should be answered with a note to consult a healthcare provider, not refused entirely
+4. **No refusal for benign requests**: This seems obvious but is harder to achieve than it sounds. Safety training has a tendency to make models over-cautious
+
+### Over-Refusal as a Product Problem
+
+Over-refusal is when the model refuses benign requests because they share surface features with harmful ones. Examples:
+
+- Refusing to write a fictional crime scene for a novel
+- Refusing to discuss historical atrocities for an educational context
+- Refusing to explain how encryption works because it could be "used for hiding criminal activity"
+- Refusing to help with a chemistry homework problem because it involves reactions that could theoretically be dangerous
+
+Over-refusal is not just annoying. It's a product problem that drives users to less-safe alternatives. If your safety-aligned model refuses to answer a legitimate question, the user switches to a model without safety training (or a jailbroken version). The net effect on safety is negative.
+
+Measuring over-refusal requires a dedicated evaluation set of benign prompts that share surface features with harmful categories. Target: under 5% false refusal rate on this set. If your safety training pushes over-refusal above 5%, the training data needs rebalancing, not more refusal examples.
+
+## Failure Modes
+
+Post-training pipelines fail in specific, well-documented ways. Most of these are detectable if you monitor the right metrics, but they can be subtle enough to ship into production unnoticed.
+
+**Reward hacking** (revisited): The policy model exploits the reward model's weaknesses. Beyond the length and sycophancy examples discussed in Step 3, reward hacking during reasoning training can take the form of the model formatting its answer to match the verifier's expected pattern without actually solving the problem. For instance, on math problems, the model might learn to extract numbers from the problem statement and combine them in ways that frequently match the answer format.
+
+Detection: Track the correlation between reward model score and actual task accuracy on a held-out set. If reward scores increase but task accuracy plateaus or decreases, the model is hacking the reward.
+
+**Mode collapse**: The model converges to a narrow set of response patterns, losing diversity. After RLHF, the model might produce nearly identical responses to varied prompts because the optimization pushed it toward a single high-reward response style. In reasoning training, mode collapse can manifest as the model always using the same reasoning strategy regardless of whether it's appropriate.
+
+Detection: Measure response diversity metrics (distinct n-grams, unique reasoning strategies) across prompt categories. A sharp decrease in diversity during RL training signals mode collapse.
+
+**Alignment tax** (revisited): Safety alignment reduces performance on legitimate tasks. This is somewhat unavoidable, but it should be bounded. If MMLU drops by more than 3% or coding benchmarks drop by more than 5% after safety training, the safety data is too aggressive or too broad in what it teaches the model to refuse.
+
+Detection: Run the full evaluation suite before and after each training stage. Track per-category performance, not just aggregate scores.
+
+**Reasoning shortcuts**: During reasoning training, the model learns superficial patterns that correlate with correctness on the training distribution but don't generalize. For example, on GSM8K, many problems involve multiplying quantities and prices. The model might learn "multiply the two largest numbers in the problem" as a heuristic that works on 60% of the training set but fails on out-of-distribution problems.
+
+Detection: Evaluate on out-of-distribution reasoning benchmarks that the model was not trained on. If in-distribution accuracy is significantly higher than out-of-distribution accuracy (more than a 15-20 point gap), the model has learned shortcuts.
+
+**Catastrophic forgetting**: Post-training, particularly the RL stages, can degrade capabilities that the base model had. The model might become excellent at math but lose its ability to generate coherent long-form text, or improve at English reasoning while degrading at multilingual tasks.
+
+Detection: Maintain a "regression suite" of diverse capabilities (multilingual, long-form generation, code, factual recall) and check it after every training stage. Any capability that drops by more than 5% should trigger investigation.
+
+## Operational Concerns
+
+### Evaluation Suite
+
+Evaluation is the single most important operational capability for a post-training team. Without a comprehensive, automated evaluation suite, you're flying blind. The suite should run automatically after every training stage checkpoint and produce a dashboard that tracks:
+
+| Category | Benchmarks | What it measures |
+|----------|------------|------------------|
+| General knowledge | MMLU [7], ARC | Factual recall, hasn't degraded |
+| Math reasoning | GSM8K [4], MATH [5], AIME | Multi-step quantitative reasoning |
+| Code | HumanEval [6], MBPP, SWE-bench | Code generation and debugging |
+| Instruction following | IFEval, MT-bench | Format adherence, multi-turn quality |
+| Safety | HarmBench, custom red-team set | Refusal rate on harmful prompts |
+| Over-refusal | Custom benign-sensitive set | False refusal rate |
+| Human preference | Side-by-side eval against previous checkpoint | Overall quality as judged by humans |
+
+Automated benchmarks catch regressions quickly. Human evaluation catches subtle quality changes that benchmarks miss (tone, nuance, creativity). Both are necessary. A good cadence: run automated benchmarks on every checkpoint (every few hundred training steps), run human evaluation on stage-final checkpoints (end of SFT, end of alignment, end of reasoning training, end of safety).
+
+### Cost Breakdown
+
+| Stage | GPUs | Duration | GPU-hours | Approx. cost (H100 at $3/hr) |
+|-------|------|----------|-----------|-------------------------------|
+| SFT | 64 | 2-3 days | 3,000-4,600 | $9K-$14K |
+| Reward model training | 32 | 3-4 days | 2,300-3,000 | $7K-$9K |
+| RLHF/PPO alignment | 64 | 5-7 days | 7,700-10,800 | $23K-$32K |
+| DPO alignment (alternative) | 64 | 3-5 days | 4,600-7,700 | $14K-$23K |
+| Reasoning RL (GRPO) | 64 | 5-7 days | 7,700-10,800 | $23K-$32K |
+| Safety alignment (DPO) | 64 | 1-2 days | 1,500-3,000 | $5K-$9K |
+| **Total (PPO path)** | | **16-23 days** | **22K-32K** | **$67K-$96K** |
+| **Total (DPO path)** | | **11-17 days** | **17K-26K** | **$48K-$73K** |
+
+These costs are for a single training run. In practice, you need 3-5 iterations to tune hyperparameters and data mixes, so the real cost is 3-5x the single-run number. The DPO path is ~30% cheaper overall, which is another reason it's the default recommendation for most teams.
+
+For comparison, pre-training the 70B base model on 15 trillion tokens costs roughly $5-10M in compute. The full post-training pipeline at $200K-400K (including iterations) is 2-5% of the pre-training budget. This is the "post-training tax" mentioned in Step 0.
+
+### Iteration Cycles
+
+Post-training is not a single pass. It's an iterative process:
+
+1. Run the full pipeline with initial hyperparameters and data
+2. Evaluate extensively (automated benchmarks + human evaluation)
+3. Identify the weakest capability (e.g., math reasoning is 10 points below target)
+4. Diagnose the cause: insufficient training data? Wrong hyperparameters? Data quality issue?
+5. Adjust and re-run the affected stage (and all subsequent stages, since each builds on the previous)
+6. Re-evaluate
+
+A typical post-training campaign for a 70B model involves 3-5 full iterations over 2-3 months. The bottleneck is usually data quality and evaluation turnaround, not compute. A team that can run evaluations overnight and review results in the morning moves much faster than a team that batches evaluations weekly.
+
+### Data Flywheel
+
+Post-training data is a competitive moat. The preference data, reasoning traces, and safety annotations are expensive to collect and difficult to replicate. A data flywheel for post-training looks like this:
+
+1. Deploy the current model version
+2. Collect user interactions (with consent and privacy safeguards)
+3. Identify conversations where the model performed poorly (low user satisfaction, thumbs-down signals, sessions where users rephrased the same question multiple times)
+4. Route these to human annotators who provide corrected responses or preference judgments
+5. Add the new data to the training pool
+6. Retrain and deploy the improved model
+
+This flywheel means that deployed models get better over time as the training data grows. It also means that companies with large user bases have a structural advantage: more users produce more feedback, which produces better training data, which produces a better model, which attracts more users.
+
+### Distributed Training for Post-Training
+
+Distributed training during post-training has different requirements than pre-training. During pre-training, you're running a single model on a massive dataset, and the parallelism strategies (tensor parallel, pipeline parallel, data parallel) are well-understood.
+
+Post-training, particularly RLHF with PPO, requires keeping four models in memory and orchestrating generation, scoring, and optimization across them. The standard approach:
+
+- **Policy model**: Tensor parallel across 8 GPUs (one node), with FSDP for the optimizer states
+- **Reference model**: Same sharding as policy, but frozen (no optimizer states, saving ~2x memory vs. an active model)
+- **Reward model** (7-13B): Fits on 2-4 GPUs with tensor parallel
+- **Value model** (7-13B): Same as reward model
+
+The generation step (sampling from the policy model) and the scoring step (running the reward model) are sequential within each batch but can be pipelined across batches. Frameworks like DeepSpeed-Chat [10], OpenRLHF [16], and TRL [17] handle this orchestration, but the memory management is tight enough that out-of-memory errors are the most common failure mode during RLHF training.
+
+DPO avoids this complexity entirely: you only need the policy model and reference model, and the training loop looks like standard supervised fine-tuning with a modified loss function. This is why DPO adoption has been so rapid. The engineering burden of four-model RLHF is substantial.
+
+For the sampling strategies used during generation (temperature, top-k, top-p), the [logits and sampling post](/blog/logits-and-sampling) covers the mechanics in detail. During RLHF training, sampling temperature is typically set higher than inference (0.8-1.0 vs. 0.3-0.7) to maintain exploration. If the policy only generates greedy outputs during training, it can't explore the response space and RL optimization becomes ineffective.
+
+## References
+
+[1] [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning (DeepSeek, 2025)](https://arxiv.org/abs/2501.12948)
+
+[2] [Learning to Reason with LLMs (OpenAI, 2024)](https://openai.com/index/learning-to-reason-with-llms/)
+
+[3] [Anthropic Research: Claude's Character](https://www.anthropic.com/research/claude-character)
+
+[4] [Training Verifiers to Solve Math Word Problems (GSM8K) (Cobbe et al., 2021)](https://arxiv.org/abs/2110.14168)
+
+[5] [Measuring Mathematical Problem Solving With the MATH Dataset (Hendrycks et al., 2021)](https://arxiv.org/abs/2103.03874)
+
+[6] [Evaluating Large Language Models Trained on Code (HumanEval) (Chen et al., 2021)](https://arxiv.org/abs/2107.03374)
+
+[7] [Measuring Massive Multitask Language Understanding (MMLU) (Hendrycks et al., 2021)](https://arxiv.org/abs/2009.03300)
+
+[8] [Training language models to follow instructions with human feedback (InstructGPT) (Ouyang et al., 2022)](https://arxiv.org/abs/2203.02155)
+
+[9] [LIMA: Less Is More for Alignment (Zhou et al., 2023)](https://arxiv.org/abs/2305.11206)
+
+[10] [DeepSpeed-Chat: Easy, Fast and Affordable RLHF Training (Microsoft, 2023)](https://arxiv.org/abs/2308.01320)
+
+[11] [Rank Analysis of Incomplete Block Designs (Bradley and Terry, 1952)](https://doi.org/10.2307/2334029)
+
+[12] [Proximal Policy Optimization Algorithms (Schulman et al., 2017)](https://arxiv.org/abs/1707.06347)
+
+[13] [Direct Preference Optimization: Your Language Model is Secretly a Reward Model (Rafailov et al., 2023)](https://arxiv.org/abs/2305.18290)
+
+[14] [Let's Verify Step by Step (PRM800K) (Lightman et al., 2023)](https://arxiv.org/abs/2305.20050)
+
+[15] [Constitutional AI: Harmlessness from AI Feedback (Bai et al., 2022)](https://arxiv.org/abs/2212.08073)
+
+[16] [OpenRLHF: An Easy-to-use, Scalable, High-performance RLHF Framework](https://github.com/OpenRLHF/OpenRLHF)
+
+[17] [TRL: Transformer Reinforcement Learning (HuggingFace)](https://github.com/huggingface/trl)
+
+[18] [A Survey of Reinforcement Learning from Human Feedback (Casper et al., 2023)](https://arxiv.org/abs/2312.14925)
+
+---
+
+*Note: This blog represents my technical views and production experience. I use AI-based tools to help with drafting and formatting to keep these posts coming daily.*
