@@ -153,6 +153,30 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 				border-top: 1px solid var(--border-color);
 				font-weight: 600;
 			}
+			.diagram-wrapper {
+				position: relative;
+				margin: 1.5em 0;
+				overflow-x: auto;
+			}
+			.diagram-expand-btn {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.35em;
+				margin-top: 0.5em;
+				padding: 0.3em 0.75em;
+				font-size: 0.8em;
+				color: var(--text-secondary);
+				background: var(--bg-secondary);
+				border: 1px solid var(--border-color);
+				border-radius: 6px;
+				cursor: pointer;
+				transition: background 0.15s, color 0.15s;
+			}
+			.diagram-expand-btn:hover {
+				background: var(--accent-color, #6366f1);
+				color: #fff;
+				border-color: transparent;
+			}
 		</style>
 	</head>
 
@@ -203,11 +227,26 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 		</main>
 		<Footer />
 
+		<!-- Diagram lightbox modal -->
+		<div id="diagram-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;">
+			<div id="diagram-modal-inner" style="position:relative;background:var(--bg-primary,#fff);border-radius:12px;padding:2rem;max-width:95vw;max-height:92vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.4);">
+				<button id="diagram-modal-close" aria-label="Close" style="position:absolute;top:0.75rem;right:0.75rem;background:none;border:1px solid var(--border-color,#ccc);border-radius:6px;padding:0.2rem 0.6rem;font-size:1rem;cursor:pointer;line-height:1.4;">✕ Close</button>
+				<div id="diagram-modal-content" style="margin-top:1.5rem;"></div>
+			</div>
+		</div>
+
 		<!-- Mermaid -->
 		<script type="module">
 			import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
 
-			mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default' });
+			const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: isDark ? 'dark' : 'default',
+				fontSize: 16,
+				flowchart: { htmlLabels: true, curve: 'basis', padding: 20 },
+				sequence: { useMaxWidth: false },
+			});
 
 			document.querySelectorAll('pre').forEach(pre => {
 				const code = pre.querySelector('code');
@@ -224,6 +263,47 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 			});
 
 			await mermaid.run();
+
+			// Wrap each rendered diagram with an expand button
+			const modal = document.getElementById('diagram-modal');
+			const modalContent = document.getElementById('diagram-modal-content');
+			const modalClose = document.getElementById('diagram-modal-close');
+
+			document.querySelectorAll('.mermaid').forEach(div => {
+				const wrapper = document.createElement('div');
+				wrapper.className = 'diagram-wrapper';
+				div.parentNode.insertBefore(wrapper, div);
+				wrapper.appendChild(div);
+
+				const btn = document.createElement('button');
+				btn.className = 'diagram-expand-btn';
+				btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg> Expand';
+				btn.setAttribute('aria-label', 'Expand diagram');
+				wrapper.appendChild(btn);
+
+				btn.addEventListener('click', () => {
+					modalContent.innerHTML = div.innerHTML;
+					// Make SVG inside modal responsive
+					const svg = modalContent.querySelector('svg');
+					if (svg) {
+						svg.style.width = '100%';
+						svg.style.height = 'auto';
+						svg.style.maxWidth = '1200px';
+					}
+					modal.style.display = 'flex';
+					document.body.style.overflow = 'hidden';
+				});
+			});
+
+			function closeModal() {
+				modal.style.display = 'none';
+				document.body.style.overflow = '';
+				modalContent.innerHTML = '';
+			}
+
+			modalClose.addEventListener('click', closeModal);
+			modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+			document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 		</script>
 
 		<!-- Table wrappers -->
