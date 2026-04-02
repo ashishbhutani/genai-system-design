@@ -228,10 +228,10 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 		<Footer />
 
 		<!-- Diagram lightbox modal -->
-		<div id="diagram-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;">
-			<div id="diagram-modal-inner" style="position:relative;background:var(--bg-primary,#fff);border-radius:12px;padding:2rem;max-width:95vw;max-height:92vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.4);">
+		<div id="diagram-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;padding:1rem;">
+			<div id="diagram-modal-inner" style="position:relative;background:var(--bg-primary,#fff);border-radius:12px;padding:2.5rem 1.5rem 1.5rem;width:92vw;max-height:90vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.4);">
 				<button id="diagram-modal-close" aria-label="Close" style="position:absolute;top:0.75rem;right:0.75rem;background:none;border:1px solid var(--border-color,#ccc);border-radius:6px;padding:0.2rem 0.6rem;font-size:1rem;cursor:pointer;line-height:1.4;">✕ Close</button>
-				<div id="diagram-modal-content" style="margin-top:1.5rem;"></div>
+				<div id="diagram-modal-content"></div>
 			</div>
 		</div>
 
@@ -282,14 +282,17 @@ const readingTime = Math.max(1, Math.ceil(wordCount / 200));
 				wrapper.appendChild(btn);
 
 				btn.addEventListener('click', () => {
-					modalContent.innerHTML = div.innerHTML;
-					// Make SVG inside modal responsive
-					const svg = modalContent.querySelector('svg');
-					if (svg) {
-						svg.style.width = '100%';
-						svg.style.height = 'auto';
-						svg.style.maxWidth = '1200px';
-					}
+					const origSvg = div.querySelector('svg');
+					if (!origSvg) return;
+					const svg = origSvg.cloneNode(true);
+					// Strip Mermaid's fixed dimensions so the SVG fills the modal
+					const vb = svg.getAttribute('viewBox') || `0 0 ${svg.getAttribute('width') || 800} ${svg.getAttribute('height') || 400}`;
+					svg.setAttribute('viewBox', vb);
+					svg.removeAttribute('width');
+					svg.removeAttribute('height');
+					svg.style.cssText = 'width:100%;height:auto;display:block;';
+					modalContent.innerHTML = '';
+					modalContent.appendChild(svg);
 					modal.style.display = 'flex';
 					document.body.style.overflow = 'hidden';
 				});
